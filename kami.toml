@@ -1,0 +1,70 @@
+# kami configuration. Secrets (RUNPOD_API_KEY, VAST_API_KEY, HF_TOKEN) live in .env, not here.
+#
+# Each profile names the models the pod loads and the GPUs to try, in order, until one has
+# stock. GPUs are named the same on every provider (`kami gpus` shows names and stock).
+#
+# The server image is built with CUDA 12.4 for Ampere / Ada / Hopper (sm 80-90), what
+# TRELLIS.2's CUDA extensions are tested on: Blackwell cards (RTX 5090, RTX PRO 6000,
+# B200) are left out of the profiles until the image is rebuilt for CUDA 12.8.
+
+[defaults]
+profile = "mesh"
+# Where pods run: "runpod" or "vast" (vast.ai). `kami up --provider vast` overrides it.
+provider = "runpod"
+# The kami-server image: build docker/Dockerfile and push it (README: Build the server
+# image) with .github/workflows/server-image.yml; the package must be public.
+container = "ghcr.io/jtorregrosa/kami-server:0.1.0"
+# "ephemeral": weights downloaded on every `kami up` (no fixed cost).
+# "volume": persistent network volume (fast boots, ~$0.07/GB/month, pinned datacenter).
+storage = "ephemeral"
+# Empty = any datacenter with stock (required with a volume). See `kami gpus`.
+datacenter = ""
+volume_name = "kami-models"
+volume_size_gb = 100
+# SECURE: RunPod's own datacenters / vast.ai's datacenter hosts. COMMUNITY: cheaper hosts.
+cloud = "SECURE"
+port = 8000
+# Where `kami mesh` / `kami image` save what they make (relative to the current directory).
+output_dir = "kami-out"
+# The pod deletes itself after max_hours of uptime, or after idle_minutes without jobs,
+# even if your PC is off. 0 disables each. Override with `kami up --max-hours / --idle`.
+max_hours = 4
+idle_minutes = 30
+
+# mesh: image -> textured GLB with TRELLIS.2 (4B, MIT). The README asks for 24 GB.
+# It also loads DINOv3 and RMBG-2.0, both gated: accept their terms on Hugging Face with
+# the account of HF_TOKEN (`kami doctor` checks it).
+[profiles.mesh]
+mesh_model = "microsoft/TRELLIS.2-4B"
+gpus = ["RTX 4090", "L40S", "RTX A6000", "L40", "A100 PCIe 80GB"]
+min_vram_gb = 24
+disk_gb = 60
+# Defaults of `kami mesh` (each is also a flag): texture 1024 / 2048 / 4096, faces
+# after simplification, and whether to remesh TRELLIS.2's raw surface.
+mesh_defaults = { texture_size = 2048, decimation_target = 500000, remesh = true }
+
+# image: text -> image with Z-Image-Turbo (6B, Apache-2.0): 8 steps, no guidance, fits 16 GB.
+[profiles.image]
+image_model = "Tongyi-MAI/Z-Image-Turbo"
+gpus = ["RTX 4090", "RTX A5000", "L40S", "RTX A6000"]
+min_vram_gb = 24
+disk_gb = 60
+image_defaults = { steps = 8, guidance = 0.0, width = 1024, height = 1024 }
+
+# studio: both models on one 48 GB card, for `kami mesh --prompt "..."` (text -> image -> mesh)
+# and for switching between images and meshes without a new pod.
+[profiles.studio]
+extends = "mesh"
+image_model = "Tongyi-MAI/Z-Image-Turbo"
+image_defaults = { steps = 8, guidance = 0.0, width = 1024, height = 1024 }
+gpus = ["L40S", "RTX A6000", "L40", "RTX 6000 Ada", "A100 PCIe 80GB"]
+min_vram_gb = 48
+disk_gb = 100
+
+# studio-24: the same on a 24 GB card: the model not in use waits on the CPU (offload),
+# so each switch between images and meshes costs some seconds.
+[profiles.studio-24]
+extends = "studio"
+gpus = ["RTX 4090", "RTX A5000"]
+min_vram_gb = 24
+offload = true

@@ -1,0 +1,59 @@
+# Builds docker/Dockerfile and pushes it to GitHub's registry as
+# ghcr.io/<owner>/kami-server:<tag>. Run it by hand (Actions -> server image -> Run
+# workflow) or push a tag like server-0.1.0. Then set `container` in kami.toml, and make
+# the package public (or give RunPod / vast.ai registry credentials) so pods can pull it.
+name: server image
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Image tag"
+        default: "0.1.0"
+  push:
+    tags: ["server-*"]
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      # the CUDA devel base image and the build need more than the runner's free disk
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          sudo docker image prune --all --force
+          df -h /
+
+      - uses: actions/checkout@v4
+
+      - name: Tag
+        id: tag
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "tag=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=${GITHUB_REF_NAME#server-}" >> "$GITHUB_OUTPUT"
+          fi
+          # registry names must be lower case
+          echo "owner=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: docker
+          push: true
+          tags: ghcr.io/${{ steps.tag.outputs.owner }}/kami-server:${{ steps.tag.outputs.tag }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

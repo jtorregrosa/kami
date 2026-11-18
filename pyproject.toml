@@ -1,0 +1,16 @@
+[project]
+name = "kami"
+version = "0.1.0"
+description = "Rent a GPU only while you use it: image -> 3D mesh (TRELLIS.2) and text -> image on RunPod or vast.ai"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.scripts]
+kami = "kami.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["kami*"]
