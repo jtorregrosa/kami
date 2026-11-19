@@ -21,7 +21,11 @@ ENV TORCH_CUDA_ARCH_LIST="8.0;8.6;8.9;9.0" \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1
 
-RUN apt-get update \
+# archive.ubuntu.com crawls from GitHub's runners (150 kB/s, timeouts): use the Azure
+# mirror the runners themselves use, and retry sooner on a stalled download.
+RUN sed -i 's|http://archive.ubuntu.com|http://azure.archive.ubuntu.com|g' /etc/apt/sources.list \
+ && printf 'Acquire::Retries "5";\nAcquire::http::Timeout "20";\n' > /etc/apt/apt.conf.d/80-retries \
+ && apt-get update \
  && apt-get install -y --no-install-recommends git sudo ca-certificates ninja-build \
         libjpeg-dev libgl1 libglib2.0-0 \
  && rm -rf /var/lib/apt/lists/*

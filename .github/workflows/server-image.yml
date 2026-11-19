@@ -60,4 +60,6 @@ jobs:
           push: true
           tags: ghcr.io/${{ steps.tag.outputs.owner }}/kami-server:${{ steps.tag.outputs.tag }}
           cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # the image is bigger than the Actions cache: a failed cache export must not
+          # fail a build whose image was already pushed
+          cache-to: type=gha,mode=max,ignore-error=true
