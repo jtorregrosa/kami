@@ -94,8 +94,9 @@ elif MESH_BACKEND == "pixal3d":
     # Pixal3D's inference defaults (1536 cascade); fov: the camera of a single picture in
     # degrees (Pixal3D estimates it with MoGe-2 for a photo; 20 is its multi-view rig's,
     # and suits product shots and `kami views` pictures)
+    # resolution None: 1536, or 1024 in its low-VRAM mode (as its inference scripts pick)
     MESH_DEFAULTS = {"texture_size": 2048, "decimation_target": 500000, "remesh": True,
-                     "resolution": 1536, "fov": 20.0}
+                     "resolution": None, "fov": 20.0}
 else:
     MESH_DEFAULTS = {"texture_size": 2048, "decimation_target": 500000, "remesh": True,
                      "multiview_mode": "stochastic"}
@@ -116,6 +117,7 @@ PIXAL_AZIMUTHS = {"front": 0, "front-left": 45, "left": 90, "back-left": 135, "b
 PIXAL_VIEW_ORDER = ("front", "left", "back", "right", "front-left", "back-left",
                     "back-right", "front-right")
 PIXAL_FOV = 0.3490658503988659            # radians: transforms.json of its example
+PIXAL_LOW_VRAM_BELOW_GIB = 40             # GPUs smaller than this run its low-VRAM mode
 PIXAL_DISTANCE = 3.1192049980163574
 PIXAL3D_CODE = "/opt/Pixal3D"             # the -pixal3d image's clone, at a pinned commit
 NAF_CODE = "/opt/NAF"                     # its feature upsampler, pinned, weights included
@@ -430,12 +432,26 @@ class PixalMesh:
     to the GPU, the other waits in RAM (each takes ~18 GB on the GPU)."""
 
     def __init__(self):
+        import torch
         from pixal3d.trainers.flow_matching.mixins import image_conditioned_proj as proj
         proj.DinoV3ProjFeatureExtractor._load_naf = _load_naf
         proj.DinoV3ProjMultiViewFeatureExtractor._load_naf = _load_naf
+        # Four posed views at 1536 ran out of memory on a 24 GB 4090: below 40 GB its own
+        # low-VRAM mode keeps the models on the CPU and moves each stage's in and out.
+        gib = torch.cuda.get_device_properties(0).total_memory / 2**30
+        self.low_vram = gib < PIXAL_LOW_VRAM_BELOW_GIB
         self.pipes = {kind: self._build(kind) for kind in ("single", "mv")}
         self.on_gpu = None
-        self.use("mv")
+        if self.low_vram:
+            log(f"Pixal3D: {gib:.0f} GiB GPU, low-VRAM mode (models on the CPU, a stage at a time)")
+            for pipe in self.pipes.values():
+                pipe.low_vram = True
+                pipe._device = torch.device("cuda")
+                for model in self._cond_models(pipe):
+                    if getattr(model, "use_naf_upsample", False):
+                        model._load_naf()          # on the CPU, as its low-VRAM mode does
+        else:
+            self.use("mv")
 
     def _build(self, kind):
         from pixal3d.pipelines import Pixal3DImageTo3DPipeline, Pixal3DMVImageTo3DPipeline
@@ -464,6 +480,8 @@ class PixalMesh:
     def use(self, kind):
         """The pipeline for `kind` ("single" / "mv"), on the GPU."""
         import torch
+        if self.low_vram:
+            return self.pipes[kind]             # it moves its own stages
         if self.on_gpu != kind:
             if self.on_gpu is not None:
                 self._move(self.pipes[self.on_gpu], "cpu")
@@ -770,7 +788,13 @@ def pixal_cutout(pipe, image):
     """RGBA with the object cut out (an image already cut out is kept as it is)."""
     if image.mode == "RGBA":
         return image
-    return pipe.rembg_model(image.convert("RGB")).convert("RGBA")
+    if getattr(pipe, "low_vram", False):
+        pipe.rembg_model.to(pipe.device)        # low-VRAM: it waits on the CPU
+    try:
+        return pipe.rembg_model(image.convert("RGB")).convert("RGBA")
+    finally:
+        if getattr(pipe, "low_vram", False):
+            pipe.rembg_model.cpu()
 
 
 def pixal_views(pipe, views):
@@ -812,7 +836,8 @@ def make_mesh_pixal3d(views, p, out_path):
     import numpy as np
     import o_voxel
     seed = int(p["seed"]) if p.get("seed") is not None else 42
-    kwargs = {"seed": seed, "pipeline_type": f"{int(p['resolution'])}_cascade"}
+    resolution = int(p["resolution"] or (1024 if PIPES.mesh.low_vram else 1536))
+    kwargs = {"seed": seed, "pipeline_type": f"{resolution}_cascade"}
     if len(views) == 1:
         pipe = PIPES.mesh.use("single")
         fov = math.radians(float(p["fov"]))

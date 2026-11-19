@@ -142,7 +142,10 @@ kami mesh front=a.png left=b.png back=c.png -p hunyuan-mv         # Hunyuan3D-2m
   (`front`, `left`, `back`, `right`, `front-left`, `back-right`...; one must be `front`,
   unnamed ones take the free names in that order). The views are cut out and framed
   alike before it sees them. A single picture works too (`fov` in `mesh_defaults`, 20
-  degrees by default, is the camera it assumes). Runs on the `-pixal3d` image.
+  degrees by default, is the camera it assumes). Runs on the `-pixal3d` image. On a
+  4090 it runs in its low-VRAM mode at resolution 1024 (~2.5 minutes a mesh); cards of
+  40 GB or more get 1536. With a concept's four views from `kami views` it keeps the
+  object's proportions; from the front alone it has to invent the back.
 
 ### Views from a concept
 

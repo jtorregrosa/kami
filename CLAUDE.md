@@ -89,12 +89,14 @@ Your PC ── kami mesh photo.png ──HTTPS──► https://<pod>-8000.proxy
 
 The client side is unit-tested with mocks. Verified on a real 4090 pod: the Docker image,
 TRELLIS.2 with `dino_model` (transformers 5 layout aliased by `fit_transformers`), and an
-image -> GLB job end to end (PNG textures), `kami reload` (on an L40S). Images go through
+image -> GLB job end to end (PNG textures), `kami reload` (on an L40S). Pixal3D on a 4090
+(`pixal3d`): 4 posed views from `kami views` -> a coherent GLB, and a single picture (both
+~2.5 min at 1024 in its low-VRAM mode; 1536 with 4 views ran out of 24 GB); its meshes
+are not watertight. Boot ~19 min (48 GB of weights). Images go through
 `server.open_image` (Pillow; pillow-heif for HEIC; OpenCV if Pillow fails; EXIF turned;
 almost opaque alpha dropped so the background is removed). Not run on a real GPU yet: `offload` moving the
 pipelines between CPU and GPU, Z-Image-Turbo, text-to-mesh, the job
-progress hooks, TRELLIS.2 multiview, Pixal3D (never run: image unbuilt, NAF with natten 0.17,
-DINOv3 aliasing, the view framing), a Hunyuan3D-2mv mesh from `kami views` pictures
+progress hooks, TRELLIS.2 multiview, a Hunyuan3D-2mv mesh from `kami views` pictures
 (left/right: Hunyuan's example left.png faces the picture's left, the LoRAs' "left side
 view" faces right, so VIEW_ANGLES swaps them; untested on an asymmetric object) (`kami views` ran: views-qwen works on an A100, jinja2 upgraded on boot by
 `ensure_packages`; views-flux loads, LoRA on all 170 layers, but it barely changes the
