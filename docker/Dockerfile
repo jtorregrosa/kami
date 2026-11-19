@@ -46,10 +46,12 @@ ENV PYTHONPATH=/opt/TRELLIS.2 \
     OPENCV_IO_ENABLE_OPENEXR=1 \
     PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
-# Fail the build here, not on a billed pod, if an import is broken (TRELLIS.2's pipeline
-# module pulls in its extensions).
-RUN python -c "import torch, diffusers, o_voxel; \
-from trellis2.pipelines import Trellis2ImageTo3DPipeline; \
-print('torch', torch.__version__, 'cuda', torch.version.cuda)"
+# Fail the build here, not on a billed pod, if something did not install. TRELLIS.2's
+# modules cannot be imported without a GPU (flex_gemm sets up Triton kernels on import,
+# and Triton needs a CUDA driver), so those are only checked to be installed.
+RUN python -c "import importlib.util as u, torch, diffusers; \
+missing = [m for m in ('trellis2', 'o_voxel', 'flex_gemm', 'nvdiffrast') if u.find_spec(m) is None]; \
+assert not missing, f'not installed: {missing}'; \
+print('torch', torch.__version__, 'cuda', torch.version.cuda, 'diffusers', diffusers.__version__)"
 
 WORKDIR /root
