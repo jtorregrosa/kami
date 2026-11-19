@@ -90,14 +90,30 @@ def weight_files(files) -> list[tuple[str, int]]:
     return safetensors or [f for f in files if f[0].endswith(WEIGHT_SUFFIXES)]
 
 
+def split_repo(entry: str) -> tuple[str, str]:
+    """("org/name", "folder") of a profile repo entry: "org/name/folder" stands for the
+    part of a repo under that folder (Hunyuan3D-2 keeps several models in one repo)."""
+    parts = entry.split("/")
+    return "/".join(parts[:2]), "/".join(parts[2:])
+
+
+def entry_files(entry: str, timeout: float | None = None) -> list[tuple[str, int]]:
+    """The weight files of a profile repo entry (only under its folder, if it has one)."""
+    repo, folder = split_repo(entry)
+    files = repo_files(repo) if timeout is None else repo_files(repo, timeout)
+    if folder:
+        files = tuple(f for f in files if f[0].startswith(folder + "/"))
+    return weight_files(files)
+
+
 def download_gb(profile) -> float:
     """GB (10^9 bytes, how hosts bill transfer) the profile downloads on each boot.
     Raises LookupError when it cannot be known."""
     total = 0
-    for repo in profile.repos:
-        files = weight_files(repo_files(repo))
+    for entry in profile.repos:
+        files = entry_files(entry)
         if not files:
-            raise LookupError(f"no weight files found in {repo}")
+            raise LookupError(f"no weight files found in {entry}")
         total += sum(size for _, size in files)
     return total / 1e9
 
@@ -109,13 +125,15 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
         return None             # the redirect to the CDN is the answer: never fetch the file
 
 
-def repo_problem(repo: str, timeout: float = 10) -> str | None:
-    """Why the pod could not download `repo` (private, missing, gated without access), or
-    None when it can -- or when it cannot be told (offline)."""
+def repo_problem(entry: str, timeout: float = 10) -> str | None:
+    """Why the pod could not download `entry` (a repo, or "org/name/folder": private,
+    missing, gated without access), or None when it can -- or when it cannot be told
+    (offline)."""
+    repo, _ = split_repo(entry)
     page = f"https://huggingface.co/{repo}"
     token = bool(os.environ.get("HF_TOKEN"))
     try:
-        files = weight_files(repo_files(repo, timeout))
+        files = entry_files(entry, timeout)
     except HubError as e:
         if e.status in (401, 403, 404):
             return (f"{repo} not found on Hugging Face"

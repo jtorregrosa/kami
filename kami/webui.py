@@ -45,9 +45,14 @@ MAX_COUNT = 8                    # images of one prompt
 MAX_ACTIVE = 16                  # jobs in flight from the page at once
 KEPT_JOBS = 40                   # finished jobs listed on the page
 STATUS_TTL = 10                  # seconds the pod's state is cached (provider API calls)
+JOBS_TTL = 2                     # seconds the pod's job listing is cached
+PROGRESS_FIELDS = ("stage", "stage_label", "step", "steps", "progress")
 
 # what the page may set per kind, and the type each value must have
-MESH_PARAMS = {"seed": int, "texture_size": int, "decimation_target": int, "remesh": bool}
+MESH_PARAMS = {"seed": int, "texture_size": int, "decimation_target": int, "remesh": bool,
+               "multiview_mode": str, "texture": bool}
+MULTIVIEW_MODES = ("stochastic", "multidiffusion")
+MAX_VIEWS = 8                    # views of one object in one job (the pod may take fewer)
 IMAGE_PARAMS = {"seed": int, "steps": int, "guidance": float, "width": int, "height": int,
                 "negative": str}
 
@@ -112,7 +117,7 @@ def _card(c: dict) -> str:
     if c["source"]:
         source = (f' · <a href="files/{quote(c["source"])}" target="_blank">'
                   f'{html.escape(c["source"])}</a>')
-    return (f'<figure class="card {c["kind"]}">'
+    return (f'<figure class="card {c["kind"]}" data-name="{name}">'
             f'<div class="media">{media}<button type="button" class="grow" title="Full size" '
             f'aria-label="Full size">&#x2922;</button></div>'
             f'<figcaption><span class="badge">{badge}</span>'
@@ -143,9 +148,36 @@ class Work:
         self.jobs: dict[str, dict] = {}
         self.ids = itertools.count(1)
 
-    def listing(self) -> list[dict]:
+    def listing(self, pod: dict | None = None) -> list[dict]:
+        """The page's jobs, newest first; with the pod's listing (GET /v1/jobs), every job
+        on the pod instead, in its order, with stage and progress: the page's own ones
+        keep their label and downloaded files, the rest (sent from a terminal or another
+        kami ui) come marked `external`."""
         with self.lock:
-            return [dict(j) for j in reversed(self.jobs.values())]
+            mine = [dict(j) for j in reversed(self.jobs.values())]
+        if not isinstance(pod, dict) or not isinstance(pod.get("jobs"), list):
+            return mine
+        by_remote = {j["remote"]: j for j in mine if j.get("remote")}
+        merged, seen = [], set()
+        for r in pod.get("jobs") or []:
+            progress = {k: r.get(k) for k in PROGRESS_FIELDS}
+            own = by_remote.get(r.get("id"))
+            if own:
+                seen.add(own["id"])
+                # the pod knows better while it works; past that this side downloads
+                if own["status"] in ("queued", "running") and r.get("status") in ("queued", "running"):
+                    own.update(status=r.get("status") or own["status"], position=r.get("position"))
+                merged.append({**own, **progress})
+            else:
+                merged.append({"id": "pod-" + str(r.get("id")), "label": r.get("name") or r.get("id"),
+                               "kind": r.get("kind"), "status": r.get("status"),
+                               "position": r.get("position"), "error": r.get("error"),
+                               "files": r.get("files") or [], "created": r.get("created"),
+                               "finished": r.get("finished"), "external": True, **progress})
+        rest = [j for j in mine if j["id"] not in seen]
+        # still being sent on top; finished ones the pod no longer keeps at the end
+        return ([j for j in rest if j["status"] not in ("done", "error")] + merged +
+                [j for j in rest if j["status"] in ("done", "error")])
 
     def active(self) -> int:
         with self.lock:
@@ -159,7 +191,7 @@ class Work:
         created = []
         for label, body in bodies:
             job = {"id": f"w{next(self.ids)}", "label": label, "kind": body["kind"],
-                   "status": "sending", "position": None, "error": None, "files": [],
+                   "status": "sending", "position": None, "error": None, "files": [], "remote": None,
                    "created": time.time(), "finished": None}
             with self.lock:
                 self.jobs[job["id"]] = job
@@ -182,6 +214,7 @@ class Work:
         try:
             url, key = self.backend.target()
             remote = jobs.submit(url, key, body)
+            self._set(job_id, remote=remote.get("id"))
             started = time.monotonic()
             while remote.get("status") not in ("done", "error"):
                 self._set(job_id, status=remote.get("status") or "queued",
@@ -248,7 +281,12 @@ def build_bodies(request: dict) -> list[tuple[str, dict]]:
         if len(images) > MAX_IMAGES:
             raise ValueError(f"At most {MAX_IMAGES} images at once")
         params = _params(request.get("params"), MESH_PARAMS)
-        bodies = []
+        if params.get("multiview_mode", "stochastic") not in MULTIVIEW_MODES:
+            raise ValueError(f"multiview_mode must be one of {', '.join(MULTIVIEW_MODES)}")
+        views = request.get("views") is True
+        if views and len(images) > MAX_VIEWS:
+            raise ValueError(f"At most {MAX_VIEWS} views of one object")
+        bodies, parts = [], []
         for image in images:
             if not isinstance(image, dict):
                 raise ValueError("Each image must be {name, data}")
@@ -264,9 +302,20 @@ def build_bodies(request: dict) -> list[tuple[str, dict]]:
                 raise ValueError(f"{name}: the image is empty")
             if len(data) > jobs.MAX_IMAGE_BYTES:
                 raise ValueError(f"{name}: over {jobs.MAX_IMAGE_BYTES // 2**20} MiB, resize it first")
+            view = image.get("view") or None
+            if view is not None and view not in jobs.VIEW_NAMES:
+                raise ValueError(f"{name}: the view must be one of {', '.join(jobs.VIEW_NAMES)}")
+            encoded = base64.b64encode(data).decode()
+            parts.append({"image": encoded, "view": view, "name": name})
             bodies.append((f"Mesh of {name}",
-                           {"kind": "mesh", "image": base64.b64encode(data).decode(),
+                           {"kind": "mesh", "image": encoded,
                             "name": jobs.safe_name(Path(name).stem), "params": params}))
+        if views:
+            # one object: one job with every image as a view of it
+            names = [p["name"] for p in parts]
+            return [(f"Mesh of {len(parts)} views ({', '.join(names)})",
+                     {"kind": "mesh", "name": jobs.safe_name(Path(names[0]).stem), "params": params,
+                      "images": [{"image": p["image"], "view": p["view"]} for p in parts]})]
         return bodies
     if kind == "image":
         prompt = _prompt(request)
@@ -320,6 +369,31 @@ class PodStatus:
             return self.value
 
 
+class PodJobs:
+    """The pod's job listing (GET /v1/jobs), cached for JOBS_TTL seconds however many
+    tabs ask. None when there is no ready pod, its server predates the listing, or it
+    cannot be reached (the page then lists only its own jobs)."""
+
+    def __init__(self, backend, ttl: float = JOBS_TTL):
+        self.backend = backend
+        self.ttl = ttl
+        self.lock = threading.Lock()
+        self.value = None
+        self.at = 0.0
+
+    def get(self, ready: bool) -> dict | None:
+        if not ready:
+            return None
+        with self.lock:
+            if time.monotonic() - self.at > self.ttl:
+                try:
+                    self.value = self.backend.jobs()
+                except Exception:
+                    self.value = None
+                self.at = time.monotonic()
+            return self.value
+
+
 # --- the page ---
 
 PAGE_FILE = Path(__file__).with_name("webui.html")
@@ -338,6 +412,8 @@ def page(folder: Path, token: str) -> str:
 
 def make_handler(folder: Path, port_ref: list, token: str, work: Work, status: PodStatus,
                  backend):
+    pod_jobs = PodJobs(backend)
+
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *args):          # quiet: the terminal shows kami's own lines
             pass
@@ -381,8 +457,10 @@ def make_handler(folder: Path, port_ref: list, token: str, work: Work, status: P
             if path in ("/", "/index.html"):
                 return self._send(200, page(folder, token).encode(), "text/html; charset=utf-8")
             if path == "/api/state":
-                return self._json(200, {"signature": signature(folder), "pod": status.get(),
-                                        "jobs": work.listing()})
+                pod = status.get()
+                listing = pod_jobs.get(bool(pod.get("pod") and pod.get("ready")))
+                return self._json(200, {"signature": signature(folder), "pod": pod,
+                                        "jobs": work.listing(listing)})
             if path == "/api/gallery":
                 return self._send(200, gallery(folder).encode(), "text/html; charset=utf-8")
             if path.startswith("/files/"):
@@ -433,7 +511,8 @@ def make_handler(folder: Path, port_ref: list, token: str, work: Work, status: P
 
 def serve(folder: Path, backend, port: int = 0, open_browser: bool = True, on_ready=None):
     """Serve the page for `folder` on 127.0.0.1 until Ctrl+C. `port` 0 picks a free one.
-    `backend` has status() -> dict, target() -> (url, api key), down() -> dict.
+    `backend` has status() -> dict, target() -> (url, api key), down() -> dict and
+    jobs() -> the pod's job listing or None.
     `on_ready(url)` runs once it listens."""
     port_ref = [port]
     token = secrets.token_urlsafe(24)

@@ -22,10 +22,21 @@ Your PC ── kami mesh photo.png ──HTTPS──► https://<pod>-8000.proxy
 ## Layout
 
 - `kami/cli.py` — argparse CLI and the commands (`init`, `doctor`, `gpus`, `prices`,
-  `profiles`, `volume`, `up`, `down`, `status`, `cost`, `logs`, `watchdog`, `mesh`, `image`, `ui`).
+  `profiles`, `volume`, `up`, `down`, `status`, `cost`, `logs`, `watchdog`, `mesh`, `image`,
+  `jobs`, `reload`, `ui`).
 - `kami/server.py` — runs *inside the pod* (its source is sent in `KAMI_SERVER_SRC` and
   run with `python3 -c`): loads the pipelines, serves `/health`, `/metrics`, `/v1/info`
-  and the jobs API (`POST /v1/jobs`, `GET /v1/jobs/<id>`, `GET /v1/jobs/<id>/files/<name>`).
+  and the jobs API (`POST /v1/jobs`, `GET /v1/jobs` (all, with stage and progress),
+  `GET /v1/jobs/<id>`, `GET /v1/jobs/<id>/files/<name>`). Progress comes from wrapping
+  TRELLIS.2's pipeline methods (stages) and its samplers' tqdm (steps), and diffusers'
+  `callback_on_step_end`. `POST /v1/reload` takes new server code (`kami reload`): it is
+  saved to `/tmp/kami-server.py`, the server exits 75 and the guard starts it again.
+  Two mesh backends (`KAMI_MESH_BACKEND`, from `config.mesh_backend(mesh_model)`):
+  TRELLIS.2, with several views of one object through `trellis_multiview` (TRELLIS 1's
+  tuning-free trick: the samplers' `_inference_model` patched per instance), and
+  Hunyuan3D-2 (`HunyuanMesh`: hy3dgen shape + Hunyuan3D-Paint, -2mv with named views).
+  Hunyuan profiles need `accept_hunyuan_license` (its licence excludes the EU, UK and
+  South Korea) and the `-hunyuan` image (`docker/Dockerfile.hunyuan`, built FROM the base).
   Stdlib HTTP; torch / trellis2 / diffusers are imported lazily, so the tests import it
   without them. kami never imports it at runtime.
 - `kami/jobs.py` — client side of the jobs API: submit, poll with a progress line, download
@@ -69,11 +80,14 @@ Your PC ── kami mesh photo.png ──HTTPS──► https://<pod>-8000.proxy
 
 ## Not verified yet
 
-The client side is unit-tested with mocks. These parts have not run on a real GPU yet:
-the Docker build, TRELLIS.2's `pipeline.run` / `o_voxel.postprocess.to_glb` arguments in
-`server.py`, `dino_model` / `rembg_model` swapping TRELLIS.2's sub-models
-(`override_model`), and `offload` moving the pipelines between CPU and GPU. Check them on the
-first real pod (`kami up --keep-on-failure`, `kami logs`).
+The client side is unit-tested with mocks. Verified on a real 4090 pod: the Docker image,
+TRELLIS.2 with `dino_model` (transformers 5 layout aliased by `fit_transformers`), and an
+image -> GLB job end to end (PNG textures). Not run on a real GPU yet: `offload` moving the
+pipelines between CPU and GPU, Z-Image-Turbo, text-to-mesh, `kami reload`, the job
+progress hooks, TRELLIS.2 multiview, the whole Hunyuan3D-2 path (image never built:
+hy3dgen against transformers 5 / diffusers 0.36 is untested), and the guard deleting the pod through GraphQL (the pod-scoped key got 403
+from api.runpod.io/v2 and rest.runpod.io did not resolve: the old guard never deleted it).
+Check them on the next pod (`kami up --keep-on-failure`, `kami logs`).
 
 ## Working notes
 

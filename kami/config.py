@@ -57,6 +57,8 @@ idle_minutes = 30
 [profiles.mesh]
 mesh_model = "microsoft/TRELLIS.2-4B"
 gpus = ["RTX 4090", "L40S", "RTX A6000"]
+min_vram_gb = 24
+min_ram_gb = 48          # host RAM per GPU: TRELLIS.2 keeps its models in RAM
 """
 
 STARTER_ENV = """\
@@ -124,6 +126,13 @@ class Profile:
     # remover. Empty = the pipeline's own (DINO_MODEL, REMBG_MODEL).
     dino_model: str = ""
     rembg_model: str = ""
+    # Hunyuan3D-2 (a mesh_model of tencent/Hunyuan3D-2*): the folder of the repo with the
+    # shape model (empty: the repo's usual one, see HUNYUAN_SUBFOLDERS), the repo of the
+    # texture model (Hunyuan3D-Paint), and the acknowledgement of its licence, which
+    # does not apply in the EU, the UK and South Korea (see README).
+    mesh_subfolder: str = ""
+    paint_model: str = ""
+    accept_hunyuan_license: bool = False
     # Defaults for the jobs (the server's own when empty): see server.py.
     image_defaults: dict = field(default_factory=dict)
     mesh_defaults: dict = field(default_factory=dict)
@@ -134,6 +143,9 @@ class Profile:
     gpu_count: int = 1
     # Smallest GPU memory the profile needs: GPUs below it are skipped (0 = no check).
     min_vram_gb: int = 0
+    # Smallest host RAM per GPU (GB): only machines with at least this (0 = any). TRELLIS.2
+    # keeps its models in RAM between steps, so a small host runs out of memory.
+    min_ram_gb: int = 0
     # Container image override (default: [defaults] container).
     container: str | None = None
     # Lowest host CUDA version ("12.4"): the pod is only placed on machines with at least this.
@@ -145,12 +157,29 @@ class Profile:
         return " + ".join(m for m in (self.mesh_model, self.image_model) if m)
 
     @property
+    def mesh_backend(self) -> str:
+        return mesh_backend(self.mesh_model)
+
+    @property
+    def shape_subfolder(self) -> str:
+        """Hunyuan3D-2: the repo folder with the shape model."""
+        return self.mesh_subfolder or HUNYUAN_SUBFOLDERS.get(self.mesh_model.lower(), HUNYUAN_SUBFOLDER)
+
+    @property
     def repos(self) -> list[str]:
-        """Every Hugging Face repo the pod downloads on boot."""
-        repos = [m for m in (self.mesh_model, self.image_model) if m]
-        if self.mesh_model:
-            repos += [self.dino_model or DINO_MODEL, self.rembg_model or REMBG_MODEL,
-                      *MESH_DEPENDENCIES]
+        """Every Hugging Face repo the pod downloads on boot. "org/name/folder" is the
+        part of a repo under that folder (Hunyuan3D-2 downloads only its folders)."""
+        image = [self.image_model] if self.image_model else []
+        if self.mesh_backend == "hunyuan":
+            paint = self.paint_model or HUNYUAN_PAINT_MODEL
+            repos = [f"{self.mesh_model}/{self.shape_subfolder}", *image,
+                     *(f"{paint}/{folder}" for folder in HUNYUAN_PAINT_FOLDERS),
+                     self.rembg_model or REMBG_MODEL]
+        elif self.mesh_model:
+            repos = [self.mesh_model, *image, self.dino_model or DINO_MODEL,
+                     self.rembg_model or REMBG_MODEL, *MESH_DEPENDENCIES]
+        else:
+            repos = image
         return list(dict.fromkeys([*repos, *self.extra_models]))
 
 
@@ -160,6 +189,24 @@ class Profile:
 DINO_MODEL = "facebook/dinov3-vitl16-pretrain-lvd1689m"
 REMBG_MODEL = "briaai/RMBG-2.0"
 MESH_DEPENDENCIES = ("microsoft/TRELLIS-image-large",)
+
+# Hunyuan3D-2 (tencent/Hunyuan3D-2, -2mv, -2mini): one repo holds several models, each in
+# its folder. The texture model (Hunyuan3D-Paint) and its delighter come from
+# tencent/Hunyuan3D-2 whatever the shape model; the background goes with RMBG-2.0 (the
+# BiRefNet TRELLIS.2 uses).
+HUNYUAN_SUBFOLDER = "hunyuan3d-dit-v2-0"
+HUNYUAN_SUBFOLDERS = {"tencent/hunyuan3d-2mv": "hunyuan3d-dit-v2-mv",
+                      "tencent/hunyuan3d-2mini": "hunyuan3d-dit-v2-mini"}
+HUNYUAN_PAINT_MODEL = "tencent/Hunyuan3D-2"
+HUNYUAN_PAINT_FOLDERS = ("hunyuan3d-paint-v2-0-turbo", "hunyuan3d-delight-v2-0")
+HUNYUAN_LICENSE = ("Hunyuan3D-2's licence (Tencent Hunyuan Community) does not apply in the "
+                   "European Union, the United Kingdom and South Korea: read it at "
+                   "https://huggingface.co/tencent/Hunyuan3D-2/blob/main/LICENSE")
+
+
+def mesh_backend(mesh_model: str) -> str:
+    """Which pipeline a mesh_model runs on: "hunyuan" (Hunyuan3D-2) or "trellis2"."""
+    return "hunyuan" if "hunyuan3d" in mesh_model.lower() else "trellis2"
 
 
 @dataclass
@@ -216,9 +263,10 @@ DEFAULT_KEYS = {
 
 PROFILE_KEYS = {
     "extends": TEXT, "mesh_model": TEXT, "image_model": TEXT, "extra_models": NAMES,
-    "dino_model": TEXT, "rembg_model": TEXT,
+    "dino_model": TEXT, "rembg_model": TEXT, "mesh_subfolder": TEXT, "paint_model": TEXT,
+    "accept_hunyuan_license": BOOL,
     "image_defaults": TABLE, "mesh_defaults": TABLE, "offload": BOOL, "gpus": NAMES,
-    "disk_gb": INT, "gpu_count": INT, "min_vram_gb": INT, "container": TEXT,
+    "disk_gb": INT, "gpu_count": INT, "min_vram_gb": INT, "min_ram_gb": INT, "container": TEXT,
     "min_cuda": VERSION,
 }
 
@@ -227,7 +275,7 @@ CHOICES = {"provider": ("runpod", "vast"), "storage": ("ephemeral", "volume"),
            "cloud": ("SECURE", "COMMUNITY")}
 RANGES = {"port": (1, 65535), "volume_size_gb": (1, None), "disk_gb": (1, None),
           "gpu_count": (1, 8), "max_hours": (0, None), "idle_minutes": (0, None),
-          "min_vram_gb": (0, None)}
+          "min_vram_gb": (0, None), "min_ram_gb": (0, None)}
 
 # Job parameters a profile's defaults may set (see server.py).
 IMAGE_PARAMS = ("steps", "guidance", "width", "height", "negative", "seed")
@@ -327,6 +375,9 @@ def validate(raw: dict) -> list[str]:
             problems.append(f"{where}: needs gpus")
         if not p.get("mesh_model") and not p.get("image_model"):
             problems.append(f"{where}: needs mesh_model or image_model (or both)")
+        if mesh_backend(p.get("mesh_model", "")) == "hunyuan" and not p.get("accept_hunyuan_license"):
+            problems.append(f"{where}: {HUNYUAN_LICENSE}. If it applies to you, set "
+                            "accept_hunyuan_license = true")
         if d.get("provider") == "vast":
             from . import catalog      # catalog imports this module
             for gpu in p.get("gpus", []):
@@ -368,12 +419,16 @@ def load_config(path: Path | None = None) -> Config:
                                  extra_models=list(p.get("extra_models", [])),
                                  dino_model=p.get("dino_model", ""),
                                  rembg_model=p.get("rembg_model", ""),
+                                 mesh_subfolder=p.get("mesh_subfolder", ""),
+                                 paint_model=p.get("paint_model", ""),
+                                 accept_hunyuan_license=bool(p.get("accept_hunyuan_license", False)),
                                  image_defaults=dict(p.get("image_defaults", {})),
                                  mesh_defaults=dict(p.get("mesh_defaults", {})),
                                  offload=bool(p.get("offload", False)),
                                  disk_gb=int(p.get("disk_gb", 80)),
                                  gpu_count=int(p.get("gpu_count", 1)),
                                  min_vram_gb=int(p.get("min_vram_gb", 0)),
+                                 min_ram_gb=int(p.get("min_ram_gb", 0)),
                                  container=p.get("container"),
                                  min_cuda=str(min_cuda) if min_cuda is not None else None)
     storage = d.get("storage", "ephemeral")

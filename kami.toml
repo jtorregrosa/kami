@@ -38,6 +38,9 @@ idle_minutes = 30
 mesh_model = "microsoft/TRELLIS.2-4B"
 gpus = ["RTX 4090", "L40S", "RTX A6000", "L40", "A100 PCIe 80GB"]
 min_vram_gb = 24
+# TRELLIS.2 keeps its ~16 GB of models in RAM between steps: a 4090 host with 29 GB ran
+# out of memory (OOM) while making a mesh. Only hosts with this much RAM per GPU.
+min_ram_gb = 48
 disk_gb = 60
 # Defaults of `kami mesh` (each is also a flag): texture 1024 / 2048 / 4096, faces
 # after simplification, and whether to remesh TRELLIS.2's raw surface.
@@ -59,6 +62,7 @@ image_model = "Tongyi-MAI/Z-Image-Turbo"
 image_defaults = { steps = 8, guidance = 0.0, width = 1024, height = 1024 }
 gpus = ["L40S", "RTX A6000", "L40", "RTX 6000 Ada", "A100 PCIe 80GB"]
 min_vram_gb = 48
+min_ram_gb = 64          # both models
 disk_gb = 100
 
 # studio-24: the same on a 24 GB card: the model not in use waits on the CPU (offload),
@@ -67,4 +71,26 @@ disk_gb = 100
 extends = "studio"
 gpus = ["RTX 4090", "RTX A5000"]
 min_vram_gb = 24
-offload = true
+offload = true           # both models wait in RAM: min_ram_gb 64 from studio
+
+# Hunyuan3D-2 (Tencent): image -> textured GLB, and Hunyuan3D-2mv for several named views
+# of one object (`kami mesh front=a.png left=b.png back=c.png`). Its licence (Tencent
+# Hunyuan Community) does NOT apply in the European Union, the United Kingdom and South
+# Korea: read https://huggingface.co/tencent/Hunyuan3D-2/blob/main/LICENSE before enabling.
+# kami refuses these profiles until accept_hunyuan_license = true. They run on the
+# -hunyuan image (the workflow's variant = hunyuan builds it).
+#
+# [profiles.hunyuan]
+# mesh_model = "tencent/Hunyuan3D-2"
+# accept_hunyuan_license = true
+# container = "ghcr.io/jtorregrosa/kami-server:0.1.0-hunyuan"
+# gpus = ["RTX 4090", "L40S", "RTX A6000", "L40"]
+# min_vram_gb = 24
+# min_ram_gb = 48
+# disk_gb = 80
+# # steps / octree_resolution / guidance of the shape model; faces kept before texturing
+# mesh_defaults = { steps = 50, octree_resolution = 380, guidance = 5.0, decimation_target = 40000 }
+#
+# [profiles.hunyuan-mv]
+# extends = "hunyuan"
+# mesh_model = "tencent/Hunyuan3D-2mv"

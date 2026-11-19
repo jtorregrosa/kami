@@ -38,8 +38,15 @@ CHECK_EVERY = 30
 # billing (a stopped vast.ai instance still bills its disk).
 ACTIONS = {
     "runpod": (
-        ("DELETE", "https://api.runpod.io/v2/pods/{id}", None),
+        # The pod-scoped key was refused by api.runpod.io/v2 (403) on a real pod, and
+        # rest.runpod.io did not resolve there: GraphQL (what runpodctl uses) comes first.
+        ("POST", "https://api.runpod.io/graphql",
+         {"query": 'mutation { podTerminate(input: {podId: "{id}"}) }'}),
         ("DELETE", "https://rest.runpod.io/v1/pods/{id}", None),
+        ("DELETE", "https://api.runpod.io/v2/pods/{id}", None),
+        ("POST", "https://api.runpod.io/graphql",
+         {"query": 'mutation { podStop(input: {podId: "{id}"}) { id desiredStatus } }'}),
+        ("POST", "https://rest.runpod.io/v1/pods/{id}/stop", None),
         ("POST", "https://api.runpod.io/v2/pods/{id}/action", {"action": "stop"}),
     ),
     "vast": (
@@ -57,6 +64,9 @@ BUSY = tuple(m for m in os.environ.get(
     "KAMI_BUSY_METRICS", "kami:jobs_running,kami:jobs_queued").split(",") if m)
 DONE = tuple(m for m in os.environ.get(
     "KAMI_DONE_METRIC", "kami:jobs_finished_total,kami:jobs_failed_total").split(",") if m)
+
+
+RELOAD_EXIT = 75        # the server exits with this to be started again (kami reload)
 
 
 def log(msg):
@@ -121,17 +131,26 @@ def delete_self():
         log(f"{provider}: the pod id / API key are missing from the env: cannot delete the pod")
         return False
     for method, url, body in ACTIONS.get(provider, ()):
+        url = url.replace("{id}", pod_id)
+        if body:
+            body = {k: v.replace("{id}", pod_id) if isinstance(v, str) else v
+                    for k, v in body.items()}
         req = urllib.request.Request(
-            url.format(id=pod_id), method=method,
-            data=json.dumps(body).encode() if body else None,
+            url, method=method, data=json.dumps(body).encode() if body else None,
             headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json",
                      "User-Agent": "kami-guard"})
         try:
-            urllib.request.urlopen(req, timeout=30).close()
-            log(f"{method} {url.format(id=pod_id)}: done")
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                raw = resp.read()
+            # GraphQL answers 200 with {"errors": [...]} when it refuses
+            if url.endswith("/graphql"):
+                answer = json.loads(raw or b"{}")
+                if answer.get("errors"):
+                    raise RuntimeError(answer["errors"][0].get("message", "GraphQL error"))
+            log(f"{method} {url}: done")
             return True
         except Exception as e:
-            log(f"{method} {url.format(id=pod_id)} failed: {e}")
+            log(f"{method} {url} failed: {e}")
     return False
 
 
@@ -291,12 +310,18 @@ def main():
         threading.Thread(target=progress, args=(dirs, port), daemon=True).start()
     if os.environ.get("KAMI_TUNNEL") == "1":
         threading.Thread(target=tunnel, args=(port,), daemon=True).start()
-    child = subprocess.Popen(sys.argv[1:])
+    current = [subprocess.Popen(sys.argv[1:])]
     for sig in (signal.SIGTERM, signal.SIGINT):
-        signal.signal(sig, lambda s, _f: child.send_signal(s))
+        signal.signal(sig, lambda s, _f: current[0].send_signal(s))
     if deadline or idle:
         threading.Thread(target=watch, args=(deadline, idle, port), daemon=True).start()
-    sys.exit(child.wait())
+    while True:
+        code = current[0].wait()
+        if code != RELOAD_EXIT:
+            sys.exit(code)
+        # `kami reload`: the server saved new code and exited to load it
+        log("server restarting with new code (kami reload)")
+        current[0] = subprocess.Popen(sys.argv[1:])
 
 
 if __name__ == "__main__":  # also true under `python3 -c`

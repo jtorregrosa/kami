@@ -18,7 +18,7 @@ from pathlib import Path
 
 from . import USER_AGENT, catalog, config, ui, vast
 from .api import ProviderError
-from .config import Config, ConfigError, load_state, require_env, save_state
+from .config import HUNYUAN_PAINT_MODEL, Config, ConfigError, load_state, require_env, save_state
 from .runpod import CONTAINER_DISK_PRICE_GB_MONTH, RunPod
 from .vast import Vast
 
@@ -458,7 +458,9 @@ def guard_program() -> str:
 
 
 # The server's source arrives in KAMI_SERVER_SRC: the command line carries the guard only.
-SERVER_BOOT = "import os;exec(os.environ['KAMI_SERVER_SRC'])"
+# After a `kami reload` the newer code saved at KAMI_RELOAD_PATH runs instead.
+SERVER_BOOT = ("import os;p=os.environ.get('KAMI_RELOAD_PATH','/tmp/kami-server.py');"
+               "exec(open(p).read() if os.path.exists(p) else os.environ['KAMI_SERVER_SRC'])")
 
 
 def server_spec(cfg: Config, profile, volume_id: str | None, api_key: str,
@@ -487,6 +489,10 @@ def server_spec(cfg: Config, profile, volume_id: str | None, api_key: str,
         env["KAMI_DINO_MODEL"] = profile.dino_model
     if profile.mesh_model and profile.rembg_model:
         env["KAMI_REMBG_MODEL"] = profile.rembg_model
+    if profile.mesh_model and profile.mesh_backend == "hunyuan":
+        env["KAMI_MESH_BACKEND"] = "hunyuan"
+        env["KAMI_MESH_SUBFOLDER"] = profile.shape_subfolder
+        env["KAMI_PAINT_MODEL"] = profile.paint_model or HUNYUAN_PAINT_MODEL
     if volume_id:
         # torch.compile / kernel caches survive on the volume between pods
         env["TORCH_HOME"] = f"{VOLUME_MOUNT}/torch"
@@ -514,6 +520,9 @@ def pod_body(cfg: Config, profile, gpu_id: str, volume_id: str | None, api_key: 
     if cuda:
         # only hosts whose driver supports this CUDA version (RunPod filters on create)
         gpu["minCudaVersion"] = cuda
+    if getattr(profile, "min_ram_gb", 0):
+        # only hosts with this much system RAM per GPU (a placement filter)
+        gpu["minRamPerGpu"] = profile.min_ram_gb
     body = {
         "name": f"kami-{profile.name}",
         "image": image,
@@ -552,6 +561,8 @@ def vast_offer(cfg: Config, profile, gpu: str, cloud: str | None = None) -> dict
         # the same name covers several memory sizes on vast (A100 40/80 GB): MiB per card
         "gpu_ram": {"gte": catalog.min_ram_mib(row)},
     }
+    if getattr(profile, "min_ram_gb", 0):
+        offer["cpu_ram"] = {"gte": profile.min_ram_gb * 1024 * count}     # MiB, the offer's share
     if row.vast_max_dph:
         offer["dph_base"] = {"lte": row.vast_max_dph * count}
     cuda = min_cuda(profile)

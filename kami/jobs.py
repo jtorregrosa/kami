@@ -69,6 +69,17 @@ def info(url: str, api_key: str) -> dict:
     return _json(*_request(url + "/v1/info", api_key), "Asking the pod what it serves")
 
 
+VIEW_NAMES = ("front", "left", "back", "right")     # Hunyuan3D-2mv's; TRELLIS.2 needs none
+
+
+def view_arg(text: str) -> tuple[str | None, str]:
+    """("front", "a.png") out of "front=a.png"; (None, text) for a plain path."""
+    name, sep, path = text.partition("=")
+    if sep and name.strip().lower() in VIEW_NAMES and path:
+        return name.strip().lower(), path
+    return None, text
+
+
 def read_image(path: Path) -> str:
     """The image as base64, after checking it is one kami can send."""
     if not path.is_file():
@@ -92,6 +103,15 @@ def check(url: str, api_key: str, job_id: str) -> dict:
     return _json(*_request(f"{url}/v1/jobs/{job_id}", api_key), "Checking the job")
 
 
+def listing(url: str, api_key: str) -> dict | None:
+    """Every job on the pod ({'jobs': [...], 'running', 'queued'}), or None when its
+    server predates GET /v1/jobs."""
+    status, raw = _request(url + "/v1/jobs", api_key)
+    if status in (404, 405):
+        return None
+    return _json(status, raw, "Listing the pod's jobs")
+
+
 STATUS_TEXT = {"queued": "Queued on the pod", "running": "Generating on the GPU"}
 
 
@@ -110,8 +130,12 @@ def wait(url: str, api_key: str, job: dict, label: str, sleep=time.sleep) -> dic
             text = STATUS_TEXT.get(status, status or "?")
             if status == "queued" and job.get("position"):
                 text += f" (#{job['position']})"
-            if progress.text != f"{label}: {text}":
-                progress.phase(f"{label}: {text}")
+            if status == "running" and job.get("stage_label"):
+                text = job["stage_label"]           # servers with progress (see server.py)
+            progress.phase(f"{label}: {text}")
+            if status == "running" and isinstance(job.get("progress"), (int, float)):
+                detail = f"step {job['step']}/{job['steps']}" if job.get("steps") else ""
+                progress.bar(job["progress"], detail)
             if time.monotonic() - started > JOB_TIMEOUT:
                 raise JobError(f"{label} is taking over {ui.duration(JOB_TIMEOUT)}\n"
                                f"It keeps running on the pod: `kami logs` to follow it.")

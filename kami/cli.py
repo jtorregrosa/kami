@@ -26,7 +26,7 @@ from .pod import (CONTAINER_DISK_PRICE_GB_MONTH, CONTAINER_START, DEAD_STATES, F
                   clear_pod, client, endpoint, ensure_volume, guard_text, healthy,
                   make_body, monthly, orphans, pod_problem,
                   pod_provider, real_session_cost, record_boot, remember_pod, root_cause,
-                  server_metrics, server_usage, session_cost, terminate,
+                  SERVER_SOURCE, server_metrics, server_usage, session_cost, terminate,
                   terminate_own, typical_boot, vast_offer)
 from .watchdog import WATCHDOG_POLL, cmd_watchdog
 
@@ -1544,6 +1544,8 @@ def mesh_params(args) -> dict:
             params[key] = value
     if getattr(args, "no_remesh", False):
         params["remesh"] = False
+    if getattr(args, "no_texture", False):
+        params["texture"] = False
     return params
 
 
@@ -1561,14 +1563,36 @@ def cmd_mesh(args, cfg: Config) -> None:
     if bool(args.images) == bool(args.prompt):
         raise ConfigError("Give one or more images, or --prompt (not both)\n"
                           'e.g. `kami mesh photo.png` or `kami mesh --prompt "a ceramic owl"`')
-    paths = [Path(i) for i in args.images]
+    named = [jobs.view_arg(i) for i in args.images]
+    views = getattr(args, "views", False) is True or any(view for view, _ in named)
+    paths = [Path(p) for _, p in named]
     encoded = [jobs.read_image(path) for path in paths]       # check every file before billing
+    if views and len(paths) < 2 and not any(view for view, _ in named):
+        raise ConfigError("--views makes one mesh out of several images of one object: give two or more")
     state = ensure_pod(args, cfg)
     _, _, served = job_target(cfg, state)
     if not served.get("mesh_model"):
         raise ConfigError(f"The active pod (profile {state.get('profile')}) serves no mesh model\n"
                           "`kami down`, then `kami up -p <a profile with mesh_model>`.")
     out = output_dir(args, cfg)
+    if views:
+        most = served.get("max_views")
+        if most is None:
+            raise ConfigError("This pod's server predates several views per mesh\n"
+                              "`kami reload` gives it the current code.")
+        if len(paths) > most:
+            raise ConfigError(f"This pod's model takes {'one image' if most == 1 else f'at most {most} views'} "
+                              f"({served.get('mesh_model')})"
+                              + ("\nSeveral views need TRELLIS.2 or tencent/Hunyuan3D-2mv." if most == 1 else ""))
+        params = mesh_params(args)
+        if getattr(args, "view_mode", None) in ("stochastic", "multidiffusion"):
+            params["multiview_mode"] = args.view_mode
+        body = {"kind": "mesh", "name": jobs.safe_name(paths[0].stem),
+                "images": [{"image": image, "view": view} for (view, _), image in zip(named, encoded)],
+                "params": params}
+        run_job(cfg, state, body, f"Mesh of {len(paths)} views ({', '.join(p.name for p in paths)})", out)
+        ui.hint("`kami ui` shows the results in your browser; or open the .glb in Blender")
+        return
     if args.prompt:
         if not served.get("image_model"):
             raise ConfigError(f"--prompt needs an image model too; profile {state.get('profile')} "
@@ -1605,6 +1629,118 @@ def cmd_image(args, cfg: Config) -> None:
     ui.hint("`kami ui` shows the results in your browser")
 
 
+RELOAD_TIMEOUT = 15 * 60      # the pipelines load again: a few minutes
+
+
+def cmd_reload(args, cfg: Config) -> None:
+    """Send this kami's server.py to the running pod and restart the server with it: no
+    new pod, no download (the weights stay on its disk), only the pipelines load again."""
+    state = load_state()
+    if not state.get("pod_id"):
+        raise ConfigError("No pod is active\n`kami up` starts one with the current code anyway.")
+    url, key = pod_url_of(cfg, state), state["api_key"]
+    served = jobs.info(url, key)
+    if not served.get("reload"):
+        raise ConfigError("This pod's server predates `kami reload`\n"
+                          "`kami down`, then `kami up`: the new pod gets the current code.")
+    source = SERVER_SOURCE.read_text(encoding="utf-8")
+    status, raw = jobs._request(url + "/v1/reload", key, {"source": source, "force": args.force})
+    if status == 409:
+        detail = jobs._json(200, raw, "").get("error", "")
+        raise ConfigError(f"The pod is busy: {detail}\n"
+                          "Wait for its jobs, or `kami reload --force` (they are lost).")
+    jobs._json(status, raw, "Sending the new server code")
+    sent = time.time()
+    ui.ok(f"New server code sent ({len(source) // 1024} KiB); the server restarts with it")
+    progress = ui.Progress("Restarting kami-server")
+    started = time.monotonic()
+    try:
+        while True:
+            if time.monotonic() - started > RELOAD_TIMEOUT:
+                raise ConfigError(f"The server is not back after {ui.duration(RELOAD_TIMEOUT)}\n"
+                                  "`kami logs` shows why; `kami down` + `kami up` starts over.")
+            if healthy(url, timeout=5):
+                try:
+                    info = jobs.info(url, key)
+                except ConfigError:
+                    info = {}
+                if (info.get("started_at") or 0) >= sent - 5:
+                    break
+                progress.phase("Restarting kami-server")
+            else:
+                progress.phase("Loading the pipelines again (the weights are on the pod's disk)")
+            for _ in range(12):
+                progress.tick()
+                time.sleep(0.25)
+    finally:
+        progress.stop()
+    ui.ok(f"Server ready with the new code in {ui.duration(time.monotonic() - started)}")
+
+
+JOBS_WATCH_EVERY = 3            # seconds between refreshes of `kami jobs --watch`
+
+
+def job_lines(listing: dict, now: float | None = None) -> list[str]:
+    """The pod's jobs as console lines: what runs (stage, bar, step), the queue, the rest."""
+    now = time.time() if now is None else now
+    lines = []
+    for j in listing.get("jobs") or []:
+        name = j.get("name") or j.get("id")
+        head = f"{j.get('id', '?'):<12}  {j.get('kind', '?'):<12}  {name[:32]:<32}"
+        status = j.get("status")
+        if status == "running":
+            fraction = min(1.0, max(0.0, float(j.get("progress") or 0)))
+            filled = round(ui.BAR_WIDTH * fraction)
+            bar = ui.cyan(ui.BAR[0] * filled) + ui.dim(ui.BAR[1] * (ui.BAR_WIDTH - filled))
+            stage = j.get("stage_label") or "running"
+            if j.get("steps"):
+                stage += f" · step {j.get('step')}/{j['steps']}"
+            took = ui.duration(now - (j.get("started") or now))
+            lines.append(f"{head}  {bar} {fraction * 100:3.0f}%  {stage} {ui.dim(took)}")
+        elif status == "queued":
+            waited = ui.duration(now - (j.get("created") or now))
+            lines.append(f"{head}  {ui.yellow('queued')} #{j.get('position') or '?'} {ui.dim(waited)}")
+        elif status == "done":
+            took = ui.duration(j.get("run_seconds") or 0)
+            lines.append(f"{head}  {ui.green('done')} in {took}  {ui.dim(', '.join(j.get('files') or []))}")
+        else:
+            error = (j.get("error") or "failed").splitlines()[0][:80]
+            lines.append(f"{head}  {ui.red('failed')}  {ui.dim(error)}")
+    return lines
+
+
+def cmd_jobs(args, cfg: Config) -> None:
+    """The pod's jobs: the running one with its stage and progress, the queue, the
+    finished ones (whoever sent them: this terminal, another one, `kami ui`)."""
+    state = load_state()
+    if not state.get("pod_id"):
+        raise ConfigError("No pod is active\n`kami up` starts one.")
+    url, key = pod_url_of(cfg, state), state["api_key"]
+    while True:
+        listing = jobs.listing(url, key)
+        if listing is None:
+            raise ConfigError("This pod's server predates `kami jobs`\n"
+                              "`kami reload` gives it the current code (a pod older than "
+                              "`kami reload` itself needs `kami down`, `kami up`).")
+        if args.json:
+            print(json.dumps(listing, indent=2))
+            return
+        if args.watch and ui.TTY:
+            sys.stdout.write("\033[H\033[J")          # redraw in place
+        lines = job_lines(listing)
+        summary = f"{listing.get('running', 0)} running · {listing.get('queued', 0)} queued"
+        ui.step(f"Jobs on pod {state['pod_id']} {ui.dim('· ' + summary)}")
+        for line in lines or [ui.dim("no jobs yet")]:
+            print(f"    {line}")
+        if not args.watch:
+            return
+        ui.hint(f"refreshing every {JOBS_WATCH_EVERY} s · Ctrl+C to stop")
+        try:
+            time.sleep(JOBS_WATCH_EVERY)
+        except KeyboardInterrupt:
+            return
+
+
 class WebBackend:
     """What `kami ui`'s page needs from kami: the pod's state, where to send jobs, and
     deleting the pod. The pod's API key stays here; the page never sees it."""
@@ -1629,13 +1765,18 @@ class WebBackend:
             pod = {k: v for k, v in pod.items() if k != "url"}
         return {"pod": pod, "ready": info["ready"], "waiting": info["waiting"],
                 "served": served and {k: served.get(k) for k in
-                                      ("mesh_model", "image_model", "mesh_defaults", "image_defaults")}}
+                                      ("mesh_model", "image_model", "mesh_defaults", "image_defaults",
+                                       "mesh_backend", "max_views", "view_names", "multiview_modes")}}
 
     def target(self) -> tuple[str, str]:
         state = load_state()
         if not state.get("pod_id"):
             raise ConfigError("No pod is active: run `kami up` in a terminal")
         return pod_url_of(self.cfg, state), state["api_key"]
+
+    def jobs(self) -> dict | None:
+        """Every job on the pod, with stage and progress (None: a server without it)."""
+        return jobs.listing(*self.target())
 
     def down(self) -> dict:
         state = load_state()
@@ -1840,8 +1981,19 @@ def main(argv: list[str] | None = None) -> None:
 
     p = sub.add_parser("mesh", help="image -> textured 3D mesh (GLB); or --prompt for text -> image -> mesh",
                        epilog="e.g. `kami mesh photo.png`, `kami mesh a.png b.jpg -o meshes`, "
+                              "`kami mesh --views front.png side.png back.png`, "
+                              "`kami mesh front=a.png left=b.png back=c.png` (Hunyuan3D-2mv), "
                               "`kami mesh --prompt \"a ceramic owl, studio light\"`")
-    p.add_argument("images", nargs="*", metavar="IMAGE", help="images to turn into meshes")
+    p.add_argument("images", nargs="*", metavar="IMAGE",
+                   help="images to turn into meshes (one each); with --views, views of one object; "
+                        "VIEW=IMAGE names a view (front, left, back, right) and implies --views")
+    p.add_argument("--views", action="store_true",
+                   help="one mesh out of all the images: views of the same object (experimental "
+                        "on TRELLIS.2; Hunyuan3D-2mv is made for it)")
+    p.add_argument("--view-mode", choices=("stochastic", "multidiffusion"),
+                   help="TRELLIS.2 with --views: one view per sampling step (stochastic, default) "
+                        "or all of them averaged (multidiffusion, as many times slower as views)")
+    p.add_argument("--no-texture", action="store_true", help="Hunyuan3D-2: the bare shape, no texture")
     p.add_argument("--prompt", help="make the image first from this prompt (needs an image model)")
     p.add_argument("--seed", type=int, help="random seed, for repeatable results")
     p.add_argument("--texture-size", type=int, choices=(1024, 2048, 4096),
@@ -1870,6 +2022,17 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--negative", help="negative prompt (models with guidance only)")
     add_pod_options(p)
     p.set_defaults(func=cmd_image)
+
+    p = sub.add_parser("reload", help="send this kami's server code to the running pod and restart "
+                                      "the server (no new pod, no download)")
+    p.add_argument("--force", action="store_true", help="even if jobs are running (they are lost)")
+    p.set_defaults(func=cmd_reload)
+
+    p = sub.add_parser("jobs", help="the pod's jobs: stage and progress of the running one, the queue",
+                       epilog="e.g. `kami jobs --watch`")
+    p.add_argument("-w", "--watch", action="store_true", help=f"refresh every {JOBS_WATCH_EVERY} s")
+    p.add_argument("--json", action="store_true", help="the raw listing, as JSON")
+    p.set_defaults(func=cmd_jobs)
 
     p = sub.add_parser("ui", help="web page on this PC: make meshes and images, browse the results",
                        epilog="e.g. `kami ui`, `kami ui meshes --port 8765`")

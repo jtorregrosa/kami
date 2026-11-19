@@ -113,8 +113,32 @@ kami mesh --prompt "a ceramic owl, studio light"      # text -> image -> mesh
 Results go to `output_dir` (`kami-out/` by default, or `-o DIR`). kami never overwrites a
 file: a second `photo.glb` becomes `photo-2.glb`.
 
+### Several views of one object
+
+By default every image is its own mesh. `--views` makes **one** mesh out of several
+pictures of the same object (front, side, back...), so its back is seen rather than
+invented:
+
+```powershell
+kami mesh --views front.png side.png back.png                     # TRELLIS.2 (up to 8)
+kami mesh --views a.png b.png --view-mode multidiffusion           # slower, often steadier
+kami mesh front=a.png left=b.png back=c.png -p hunyuan-mv         # Hunyuan3D-2mv
+```
+
+- **TRELLIS.2** was trained on single images. kami adds the tuning-free trick of TRELLIS
+  (1)'s `run_multi_image`: the sampler sees one view per step (`stochastic`, default)
+  or the average of all of them (`multidiffusion`, as many times slower as views). It is
+  **experimental**: views with the same light, size and centring help; mismatched ones
+  make it worse.
+- **Hunyuan3D-2mv** is trained for it, with named views: `front`, `left`, `back`, `right`
+  (`VIEW=IMAGE`; unnamed ones take the free names in that order). Its texture is painted
+  from the front view. See the licence note below before using it.
+
+`kami ui` has the same switch ("One object: the images are views of it").
+
 **`kami ui`** does all of this from a web page on your PC: drop images to make meshes,
-write prompts to make images (or meshes from text), follow the jobs, and browse every
+write prompts to make images (or meshes from text), follow every job on the pod (its stage
+and progress, the queue, also the ones sent from a terminal), and browse every
 result, with meshes in an interactive 3D viewer (rotate, zoom, full size) next to the
 image they came from. It shows the pod's cost and the guard's deadline, and can delete
 the pod. It never starts one: run `kami up` first (browsing needs no pod).
@@ -137,10 +161,12 @@ If the cloud has no stock, `kami up` **waits** for it (nothing is billed while w
 | `kami gpus` | GPUs with stock, price and datacenters (`--min-vram`, `--secure`) |
 | `kami prices [PROFILE...]` | What each profile costs now: GPU, disk, download, total for `--hours` |
 | `kami up [-p PROFILE]` | Create the pod and wait until the models are loaded (`--budget`, `--max-hours`, `--idle`) |
-| `kami mesh IMAGE...` | Image(s) → textured GLB (`--seed`, `--texture-size`, `--decimation-target`, `--no-remesh`) |
+| `kami mesh IMAGE...` | Image(s) → textured GLB (`--seed`, `--texture-size`, `--decimation-target`, `--no-remesh`; `--views` for one mesh from several views, `--view-mode`) |
 | `kami mesh --prompt TEXT` | Text → image → GLB (needs a profile with both models) |
 | `kami image PROMPT` | Text → PNG (`-n`, `--seed`, `--steps`, `--guidance`, `--width`, `--height`) |
 | `kami ui [FOLDER]` | Web page on this PC: make meshes and images on the pod, browse the results (`--port`, `--no-browser`) |
+| `kami jobs` | The pod's jobs, whoever sent them: stage and progress of the running one, the queue, the last ones (`--watch`, `--json`) |
+| `kami reload` | Send this kami's server code to the running pod and restart the server: no new pod, no download (`--force` with jobs running) |
 | `kami status` | Pod state, cost so far, guard, jobs done (`--json`; exit 0 ready, 2 not ready, 3 no pod) |
 | `kami logs` | Stream the pod logs (`--no-follow`, `-n`) |
 | `kami down` | Delete the pod (a network volume is kept) |
@@ -177,7 +203,8 @@ image_defaults = { steps = 8, guidance = 0.0, width = 1024, height = 1024 }
 ```
 
 Other keys: `extends` (inherit a profile and override keys), `offload` (keep the model not
-in use on the CPU), `dino_model` / `rembg_model` (replace the DINOv3 model or the
+in use on the CPU), `min_ram_gb` (only hosts with this much system RAM per GPU: TRELLIS.2
+keeps its models in RAM, and a 29 GB host ran out of memory), `dino_model` / `rembg_model` (replace the DINOv3 model or the
 background remover TRELLIS.2 loads, see below), `extra_models` (more repos to check access to), `gpu_count`,
 `container` (a per-profile image), `min_cuda`. `kami.toml` is checked as a whole: a typo
 is reported with a suggestion before anything is created.
@@ -228,6 +255,13 @@ kami itself is MIT. The models have their own terms. Check them for your use:
   the pipeline.
 - **DINOv3** (image features, loaded by TRELLIS.2): Meta's DINOv3 license.
 - **Z-Image-Turbo**: Apache-2.0.
+- **Hunyuan3D-2 / -2mv** (optional, `hunyuan*` profiles): Tencent Hunyuan Community
+  License, which **does not apply in the European Union, the United Kingdom and South
+  Korea** ([LICENSE](https://huggingface.co/tencent/Hunyuan3D-2/blob/main/LICENSE)). kami
+  refuses a profile with a Hunyuan3D-2 model until it says `accept_hunyuan_license = true`:
+  set it only if the licence covers you. Those profiles run on the `-hunyuan` image
+  (`docker/Dockerfile.hunyuan`, the workflow's `variant = hunyuan`), and are commented
+  out in this repo's `kami.toml`.
 
 ## How it works
 

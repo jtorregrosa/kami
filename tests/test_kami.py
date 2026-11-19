@@ -194,6 +194,19 @@ class PodBody(ProjectTestCase):
         self.assertEqual(pod.pod_body(cfg, p, "GPU A", None, "k")["image"], "my/image:1")
         self.assertNotIn("KAMI_DINO_MODEL", env)
 
+    def test_min_ram_reaches_both_providers(self):
+        cfg = config.load_config()
+        p = config.Profile("m", ["GPU A"], mesh_model="org/mesh", min_ram_gb=48)
+        self.assertEqual(pod.pod_body(cfg, p, "GPU A", None, "k")["gpu"]["minRamPerGpu"], 48)
+        p0 = config.Profile("m", ["GPU A"], mesh_model="org/mesh")
+        self.assertNotIn("minRamPerGpu", pod.pod_body(cfg, p0, "GPU A", None, "k")["gpu"])
+        with mock.patch.object(pod.catalog, "provider_gpu", return_value="RTX_4090"), \
+                mock.patch.object(pod.catalog, "find", return_value=mock.Mock(vast_max_dph=None)), \
+                mock.patch.object(pod.catalog, "min_ram_mib", return_value=24000):
+            p.gpu_count = 2
+            self.assertEqual(pod.vast_offer(cfg, p, "GPU A", "COMMUNITY")["cpu_ram"], {"gte": 48 * 1024 * 2})
+            self.assertNotIn("cpu_ram", pod.vast_offer(cfg, p0, "GPU A", "COMMUNITY"))
+
     def test_replaced_sub_models_reach_the_server(self):
         cfg = config.load_config()
         p = config.Profile("m", ["GPU A"], mesh_model="org/mesh", dino_model="me/dinov3",
@@ -1118,6 +1131,19 @@ class Server(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, error):
                 self.server.submit(body)
 
+    def test_dinov3_layers_aliased_for_transformers_5(self):
+        layers = object()
+        inner = types.SimpleNamespace(_modules={"layer": layers})
+        dino = types.SimpleNamespace(_modules={"model": inner})
+        pipeline = types.SimpleNamespace(image_cond_model=types.SimpleNamespace(model=dino))
+        self.server.fit_transformers(pipeline)
+        self.assertIs(dino.layer, layers)
+        old = types.SimpleNamespace(_modules={"layer": layers})          # transformers 4
+        self.server.fit_transformers(types.SimpleNamespace(
+            image_cond_model=types.SimpleNamespace(model=old)))
+        self.assertNotIn("layer", old.__dict__)
+        self.server.fit_transformers(types.SimpleNamespace())             # no DINOv3: no-op
+
     def test_override_model_swaps_the_repo(self):
         class Extractor:
             def __init__(self, model_name, image_size=512):
@@ -1149,10 +1175,11 @@ class ServerRoundTrip(unittest.TestCase):
 
         def fake_run(job):
             os.makedirs(job.dir, exist_ok=True)
-            if job.image_bytes == b"boom":
+            data = b"".join(image for _, image in job.image_bytes)     # [(view, bytes)]
+            if data == b"boom":
                 raise RuntimeError("CUDA out of memory")
             with open(os.path.join(job.dir, f"{job.name}.glb"), "wb") as f:
-                f.write(b"glTF" + job.image_bytes)
+                f.write(b"glTF" + data)
             job.files.append(f"{job.name}.glb")
 
         for patcher in (mock.patch.multiple(server, API_KEY="k", JOBS_DIR=self.tmp.name, JOBS={},
@@ -1888,3 +1915,616 @@ class WebUI(unittest.TestCase):
         self.assertEqual(first["served"]["mesh_model"], "m")
         self.assertNotIn("secret", first["served"])
         served.assert_called_once()                       # cached per pod
+
+
+class Reload(unittest.TestCase):
+    """`kami reload`: the server takes new code, the guard restarts it, the boot runs it."""
+
+    def setUp(self):
+        import threading
+        from http.server import ThreadingHTTPServer
+        from kami import server
+        self.server = server
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.path = os.path.join(tmp.name, "kami-server.py")
+        self.timer = mock.Mock()
+        for patcher in (mock.patch.multiple(server, API_KEY="k", RELOAD_PATH=self.path, JOBS={},
+                                            QUEUE_ORDER=[], log=mock.Mock(),
+                                            COUNTS={"finished": 0, "failed": 0, "running": 0}),
+                        mock.patch.object(server.threading, "Timer", self.timer)):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), server.Handler)
+        threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
+        self.addCleanup(self.httpd.server_close)
+        self.addCleanup(self.httpd.shutdown)
+        self.url = f"http://127.0.0.1:{self.httpd.server_address[1]}"
+
+    def post(self, body, key="k"):
+        return jobs._request(self.url + "/v1/reload", key, body)
+
+    def test_new_code_is_saved_and_the_server_exits_to_load_it(self):
+        status, _ = self.post({"source": "x = 1\n"})
+        self.assertEqual(status, 202)
+        self.assertEqual(Path(self.path).read_text(encoding="utf-8"), "x = 1\n")
+        self.timer.assert_called_once()
+        self.assertEqual(self.timer.call_args.args[1], os._exit)
+        self.assertEqual(self.timer.call_args.kwargs["args"], (self.server.RELOAD_EXIT,))
+
+    def test_bad_code_is_refused_and_nothing_changes(self):
+        for body in ({"source": "def broken(:\n"}, {}, {"source": 3}):
+            status, raw = self.post(body)
+            self.assertEqual(status, 400, body)
+        self.assertFalse(os.path.exists(self.path))
+        self.timer.assert_not_called()
+
+    def test_busy_server_needs_force(self):
+        self.server.COUNTS["running"] = 1
+        status, _ = self.post({"source": "x = 1\n"})
+        self.assertEqual(status, 409)
+        self.assertFalse(os.path.exists(self.path))
+        self.assertEqual(self.post({"source": "x = 1\n", "force": True})[0], 202)
+
+    def test_only_with_the_key(self):
+        self.assertEqual(self.post({"source": "x = 1\n"}, key="wrong")[0], 401)
+        self.assertFalse(os.path.exists(self.path))
+
+    def test_info_says_it_can_reload(self):
+        with mock.patch.object(self.server, "PIPES", mock.Mock(ready=True)):
+            info = jobs.info(self.url, "k")
+        self.assertTrue(info["reload"])
+        self.assertIsInstance(info["started_at"], float)
+
+    def test_boot_runs_the_reloaded_code_when_there_is_some(self):
+        env = {"KAMI_RELOAD_PATH": self.path, "KAMI_SERVER_SRC": "booted = 'env'"}
+        with mock.patch.dict(os.environ, env):
+            scope = {}
+            exec(pod.SERVER_BOOT, scope)
+            self.assertEqual(scope["booted"], "env")
+            Path(self.path).write_text("booted = 'reloaded'", encoding="utf-8")
+            scope = {}
+            exec(pod.SERVER_BOOT, scope)
+            self.assertEqual(scope["booted"], "reloaded")
+
+    def test_guard_restarts_the_server_after_a_reload(self):
+        first, second = mock.Mock(), mock.Mock()
+        first.wait.return_value = guard.RELOAD_EXIT
+        second.wait.return_value = 3
+        env = {k: v for k, v in os.environ.items()
+               if k not in ("KAMI_DEADLINE", "KAMI_IDLE", "KAMI_WATCH", "KAMI_TUNNEL")}
+        with mock.patch.dict(os.environ, env, clear=True), \
+                mock.patch.object(guard.subprocess, "Popen", side_effect=[first, second]) as popen, \
+                mock.patch.object(guard, "log"), mock.patch.object(guard.signal, "signal"), \
+                mock.patch.object(guard.sys, "argv", ["guard", "python3", "-c", "boot"]), \
+                self.assertRaises(SystemExit) as exit_:
+            guard.main()
+        self.assertEqual(popen.call_count, 2)
+        self.assertEqual(popen.call_args.args[0], ["python3", "-c", "boot"])
+        self.assertEqual(exit_.exception.code, 3)          # any other exit ends the pod
+
+    def test_cli_refuses_an_old_pod(self):
+        state = {"pod_id": "p", "api_key": "k"}
+        with mock.patch.object(cli, "load_state", return_value=state), \
+                mock.patch.object(cli, "pod_url_of", return_value=self.url), \
+                mock.patch.object(jobs, "info", return_value={"mesh_model": "m"}), \
+                mock.patch.object(jobs, "_request") as request:
+            with self.assertRaisesRegex(ConfigError, "predates"):
+                cli.cmd_reload(mock.Mock(force=False), mock.Mock())
+        request.assert_not_called()
+
+    def test_cli_sends_the_code_and_waits_for_the_new_server(self):
+        state = {"pod_id": "p", "api_key": "k"}
+        infos = [{"reload": True, "started_at": 0},             # before
+                 {"reload": True, "started_at": 0},             # old server still answering
+                 {"reload": True, "started_at": 9e12}]          # the new one
+        with mock.patch.object(cli, "load_state", return_value=state), \
+                mock.patch.object(cli, "pod_url_of", return_value=self.url), \
+                mock.patch.object(jobs, "info", side_effect=infos), \
+                mock.patch.object(jobs, "_request", return_value=(202, b'{"reloading": true}')) as request, \
+                mock.patch.object(cli, "healthy", side_effect=[True, False, True]), \
+                mock.patch.object(cli.time, "sleep"), mock.patch.object(cli.ui, "Progress"), \
+                mock.patch.object(cli.ui, "ok"):
+            cli.cmd_reload(mock.Mock(force=False), mock.Mock())
+        sent = request.call_args.args[2]
+        self.assertIn("def make_mesh", sent["source"])
+        self.assertFalse(sent["force"])
+
+
+class JobProgress(unittest.TestCase):
+    """Stage and progress of the running job, GET /v1/jobs, and who shows them."""
+
+    def setUp(self):
+        from kami import server
+        self.server = server
+        for patcher in (mock.patch.multiple(server, API_KEY="k", JOBS={}, QUEUE_ORDER=[],
+                                            CURRENT=[None], log=mock.Mock()),):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def job(self, kind="mesh", status="running"):
+        job = self.server.Job(kind, "a prompt" if kind != "mesh" else "", b"x", {}, "duck")
+        job.status = status
+        self.server.JOBS[job.id] = job
+        return job
+
+    # --- the server ---
+
+    def test_stages_and_steps_add_up(self):
+        job = self.job()
+        self.server.CURRENT[0] = job
+        self.server.stage("prepare")
+        self.assertEqual(job.progress, 0.0)
+        self.server.stage("structure")
+        self.assertAlmostEqual(job.progress, .08)               # prepare + condition done
+        self.server.step(6, 12)
+        self.assertAlmostEqual(job.progress, .08 + .12 * .5)
+        info = job.info()
+        self.assertEqual((info["stage"], info["step"], info["steps"]), ("structure", 6, 12))
+        self.assertEqual(info["stage_label"], "Sampling the sparse structure")
+        self.server.stage("glb")
+        self.assertAlmostEqual(job.progress, .84)
+        job.status = "done"
+        self.assertEqual(job.info()["progress"], 1.0)
+        self.assertIsNone(job.info()["stage"])
+
+    def test_the_cascade_shape_counts_both_passes(self):
+        job = self.job()
+        self.server.CURRENT[0] = job
+        self.server.stage("shape", loops=2)
+        base = job.progress
+        self.server.step(12, 12)                                 # first pass done: half
+        self.assertAlmostEqual(job.progress, base + .34 / 2)
+        self.server.step(6, 12)                                  # half of the second
+        self.assertAlmostEqual(job.progress, base + .34 * .75)
+        self.server.step(1, 12)                                  # never backwards
+        self.assertAlmostEqual(job.progress, base + .34 * .75)
+
+    def test_text_to_mesh_gives_the_image_a_fifth(self):
+        job = self.job("text-to-mesh")
+        self.server.CURRENT[0] = job
+        self.server.stage("image")
+        self.server.step(8, 8)
+        self.assertAlmostEqual(job.progress, .2)
+        self.server.stage("structure")
+        self.assertAlmostEqual(job.progress, .2 + .08 * .8)
+
+    def test_no_running_job_no_effect_and_offload_has_no_share(self):
+        self.server.stage("shape")
+        self.server.step(1, 2)                                   # nothing runs: ignored
+        job = self.job()
+        self.server.CURRENT[0] = job
+        self.server.stage("to_gpu")
+        self.assertEqual((job.progress, job.info()["stage_label"]),
+                         (0.0, "Moving the model to the GPU"))
+
+    def test_samplers_report_their_steps_and_keep_their_bars(self):
+        job = self.job()
+        self.server.CURRENT[0] = job
+        bars = []
+
+        def fake_tqdm(iterable=None, *args, **kwargs):
+            bars.append(kwargs.get("desc"))
+            return iter(iterable)
+        sampler = types.ModuleType("trellis2.pipelines.samplers.flow_euler")
+        sampler.tqdm = fake_tqdm
+        other = types.ModuleType("trellis2.utils.render")
+        other.tqdm = fake_tqdm
+
+        class Pipe:
+            def sample_sparse_structure(self, cond):
+                return [x for x in sampler.tqdm(range(4), desc="Sampling sparse structure")]
+
+        pipe = Pipe()
+        with mock.patch.dict(sys.modules, {sampler.__name__: sampler, other.__name__: other}):
+            self.server.track_mesh_progress(pipe)
+            self.server.track_mesh_progress(pipe)                # twice: not wrapped twice
+            self.assertEqual(pipe.sample_sparse_structure("c"), [0, 1, 2, 3])
+        self.assertIs(other.tqdm, fake_tqdm)                     # only the samplers
+        self.assertEqual(bars, ["Sampling sparse structure"])
+        self.assertEqual((job.stage, job.step, job.steps), ("structure", 4, 4))
+        self.assertAlmostEqual(job.progress, .08 + .12)
+
+    def test_listing_puts_running_then_queue_then_finished(self):
+        old = self.job(status="done")
+        old.finished = 1
+        new = self.job(status="error")
+        new.finished = 2
+        second, first = self.job(status="queued"), self.job(status="queued")
+        self.server.QUEUE_ORDER[:] = [first.id, second.id]
+        running = self.job()
+        listing = self.server.listing()
+        self.assertEqual([j["id"] for j in listing["jobs"]],
+                         [running.id, first.id, second.id, new.id, old.id])
+        self.assertEqual((listing["running"], listing["queued"]), (1, 2))
+        self.assertEqual(listing["jobs"][1]["position"], 1)
+
+    def test_get_v1_jobs_over_http(self):
+        import threading
+        from http.server import ThreadingHTTPServer
+        self.job()
+        httpd = ThreadingHTTPServer(("127.0.0.1", 0), self.server.Handler)
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        self.addCleanup(httpd.server_close)
+        self.addCleanup(httpd.shutdown)
+        url = f"http://127.0.0.1:{httpd.server_address[1]}"
+        listing = jobs.listing(url, "k")
+        self.assertEqual(listing["jobs"][0]["name"], "duck")
+        self.assertIn("progress", listing["jobs"][0])
+        with self.assertRaisesRegex(ConfigError, "401"):
+            jobs.listing(url, "wrong")
+
+    def test_an_old_server_has_no_listing(self):
+        with mock.patch.object(jobs, "_request", return_value=(404, b'{"error": "not found"}')):
+            self.assertIsNone(jobs.listing("https://pod", "k"))
+
+    # --- kami mesh / image ---
+
+    def test_wait_shows_the_stage_and_a_bar(self):
+        running = {"id": "j", "status": "running", "stage_label": "Sampling the shape",
+                   "progress": .4, "step": 3, "steps": 12}
+        with mock.patch.object(jobs.ui, "Progress") as progress, \
+                mock.patch.object(jobs, "_request", return_value=(200, b'{"id": "j", "status": "done"}')):
+            jobs.wait("https://pod", "k", running, "Mesh", sleep=lambda s: None)
+        line = progress.return_value
+        line.phase.assert_any_call("Mesh: Sampling the shape")
+        line.bar.assert_called_with(.4, "step 3/12")
+
+    # --- kami jobs ---
+
+    def test_job_lines(self):
+        listing = {"jobs": [
+            {"id": "a1", "kind": "mesh", "name": "duck", "status": "running", "progress": .5,
+             "stage_label": "Sampling the shape", "step": 6, "steps": 12, "started": 90},
+            {"id": "b2", "kind": "image", "name": "owl", "status": "queued", "position": 1, "created": 95},
+            {"id": "c3", "kind": "mesh", "name": "cat", "status": "done", "run_seconds": 61,
+             "files": ["cat.glb"]},
+            {"id": "d4", "kind": "mesh", "name": "dog", "status": "error", "error": "OOM\ntrace"}]}
+        lines = cli.job_lines(listing, now=100)
+        self.assertIn(" 50%  Sampling the shape · step 6/12 10s", lines[0])
+        self.assertIn("queued #1", lines[1])
+        self.assertIn("done in 1m 01s", lines[2])
+        self.assertIn("cat.glb", lines[2])
+        self.assertTrue(lines[3].rstrip().endswith("OOM"))
+
+    def test_cmd_jobs(self):
+        state = {"pod_id": "p", "api_key": "k"}
+        listing = {"jobs": [], "running": 0, "queued": 0}
+        with mock.patch.object(cli, "load_state", return_value=state), \
+                mock.patch.object(cli, "pod_url_of", return_value="https://pod"), \
+                mock.patch.object(jobs, "listing", return_value=listing), \
+                mock.patch("sys.stdout", new_callable=io.StringIO) as out:
+            cli.cmd_jobs(mock.Mock(json=True, watch=False), mock.Mock())
+        self.assertEqual(json.loads(out.getvalue()), listing)
+        with mock.patch.object(cli, "load_state", return_value=state), \
+                mock.patch.object(cli, "pod_url_of", return_value="https://pod"), \
+                mock.patch.object(jobs, "listing", return_value=None):
+            with self.assertRaisesRegex(ConfigError, "predates"):
+                cli.cmd_jobs(mock.Mock(json=False, watch=False), mock.Mock())
+
+    # --- kami ui ---
+
+    def test_the_page_lists_every_job_on_the_pod(self):
+        work = webui.Work(mock.Mock(), Path("."))
+        work.jobs = {
+            "w1": {"id": "w1", "label": "duck.png", "status": "running", "remote": "r1", "files": [],
+                   "created": 1, "finished": None, "error": None, "position": None},
+            "w2": {"id": "w2", "label": "owl", "status": "downloading", "remote": "r2", "files": [],
+                   "created": 2, "finished": None, "error": None, "position": None},
+            "w3": {"id": "w3", "label": "cat", "status": "sending", "remote": None, "files": [],
+                   "created": 3, "finished": None, "error": None, "position": None}}
+        pod = {"jobs": [
+            {"id": "r1", "status": "running", "stage_label": "Sampling the shape", "progress": .5},
+            {"id": "r9", "name": "from-cli", "kind": "mesh", "status": "queued", "position": 1},
+            {"id": "r2", "status": "done", "progress": 1.0, "files": ["owl.png"]}]}
+        listing = work.listing(pod)
+        self.assertEqual([j["id"] for j in listing], ["w3", "w1", "pod-r9", "w2"])
+        self.assertEqual((listing[1]["label"], listing[1]["progress"]), ("duck.png", .5))
+        self.assertTrue(listing[2]["external"])
+        self.assertEqual(listing[3]["status"], "downloading")    # done there, still coming here
+        self.assertEqual(len(work.listing(None)), 3)
+        self.assertEqual(len(work.listing(mock.Mock())), 3)
+
+    def test_pod_jobs_cache_and_failures(self):
+        backend = mock.Mock()
+        backend.jobs.return_value = {"jobs": []}
+        cache = webui.PodJobs(backend, ttl=60)
+        self.assertIsNone(cache.get(ready=False))
+        self.assertEqual(cache.get(ready=True), {"jobs": []})
+        cache.get(ready=True)
+        backend.jobs.assert_called_once()
+        backend.jobs.side_effect = ConfigError("unreachable")
+        self.assertIsNone(webui.PodJobs(backend).get(ready=True))
+
+
+class GuardDeletesItself(unittest.TestCase):
+    """The pod-scoped RunPod key was refused by api.runpod.io/v2 (403) and rest.runpod.io
+    did not resolve on a real pod: GraphQL goes first, and its errors count as failures."""
+
+    def answer(self, body):
+        resp = mock.MagicMock()
+        resp.__enter__.return_value.read.return_value = json.dumps(body).encode()
+        return resp
+
+    def run_guard(self, answers):
+        env = {"RUNPOD_POD_ID": "pod1", "RUNPOD_API_KEY": "scoped", "KAMI_PROVIDER": "runpod"}
+        with mock.patch.dict(os.environ, env), mock.patch.object(guard, "log"), \
+                mock.patch.object(guard.urllib.request, "urlopen", side_effect=answers) as urlopen:
+            done = guard.delete_self()
+        return done, [c.args[0] for c in urlopen.call_args_list]
+
+    def test_graphql_terminate_first(self):
+        done, reqs = self.run_guard([self.answer({"data": {"podTerminate": None}})])
+        self.assertTrue(done)
+        self.assertEqual(reqs[0].full_url, "https://api.runpod.io/graphql")
+        query = json.loads(reqs[0].data)["query"]
+        self.assertIn('podTerminate(input: {podId: "pod1"})', query)
+        self.assertEqual(reqs[0].get_header("Authorization"), "Bearer scoped")
+
+    def test_a_graphql_error_tries_the_next_way(self):
+        done, reqs = self.run_guard([self.answer({"errors": [{"message": "not allowed"}]}),
+                                     OSError("Name or service not known"),
+                                     self.answer({})])
+        self.assertTrue(done)
+        self.assertEqual([r.get_method() for r in reqs], ["POST", "DELETE", "DELETE"])
+        self.assertEqual(reqs[2].full_url, "https://api.runpod.io/v2/pods/pod1")
+
+    def test_every_way_failing_is_reported(self):
+        done, reqs = self.run_guard([OSError("down")] * len(guard.ACTIONS["runpod"]))
+        self.assertFalse(done)
+        self.assertEqual(len(reqs), len(guard.ACTIONS["runpod"]))
+        self.assertIn('podStop(input: {podId: "pod1"})', json.loads(reqs[3].data)["query"])
+
+
+class MultiView(unittest.TestCase):
+    """Several views of one object: TRELLIS.2's tuning-free multiview, Hunyuan3D-2(mv)."""
+
+    def setUp(self):
+        from kami import server
+        self.server = server
+        patcher = mock.patch.multiple(server, CURRENT=[None], log=mock.Mock())
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def b64(self, data=b"png"):
+        return base64.b64encode(data).decode()
+
+    def backend(self, backend="trellis2", mv=False):
+        return mock.patch.multiple(self.server, MESH_BACKEND=backend, HUNYUAN_MV=mv,
+                                   MESH_MODEL="tencent/Hunyuan3D-2" if backend == "hunyuan" else "m")
+
+    # --- the job body ---
+
+    def test_one_image_is_one_unnamed_view(self):
+        with self.backend():
+            self.assertEqual(self.server.mesh_views({"image": self.b64()}), [(None, b"png")])
+
+    def test_trellis_takes_any_views_up_to_the_limit(self):
+        with self.backend():
+            views = self.server.mesh_views({"images": [{"image": self.b64(b"a")}, {"image": self.b64(b"b"), "view": "side"}]})
+            self.assertEqual(views, [(None, b"a"), ("side", b"b")])
+            with self.assertRaisesRegex(ValueError, "at most 8"):
+                self.server.mesh_views({"images": [{"image": self.b64()}] * 9})
+
+    def test_hunyuan_single_refuses_views(self):
+        with self.backend("hunyuan"):
+            with self.assertRaisesRegex(ValueError, "one image.*Hunyuan3D-2mv"):
+                self.server.mesh_views({"images": [{"image": self.b64()}] * 2})
+
+    def test_hunyuan_mv_names_the_views(self):
+        with self.backend("hunyuan", mv=True):
+            views = self.server.mesh_views({"images": [{"image": self.b64(b"a"), "view": "back"},
+                                                       {"image": self.b64(b"b")}, {"image": self.b64(b"c")}]})
+            self.assertEqual([v for v, _ in views], ["back", "front", "left"])
+            for bad, why in (([{"image": self.b64(), "view": "top"}], "unknown view"),
+                             ([{"image": self.b64(), "view": "front"}] * 2, "once"),
+                             ([{"image": self.b64()}] * 5, "at most 4")):
+                with self.assertRaisesRegex(ValueError, why):
+                    self.server.mesh_views({"images": bad})
+
+    def test_bad_bodies(self):
+        with self.backend():
+            for body, why in (({"images": []}, "needs an image"), ({"images": "x"}, "list"),
+                              ({"images": [{"image": "%%"}]}, "base64"), ({}, "needs an image")):
+                with self.assertRaisesRegex(ValueError, why):
+                    self.server.mesh_views(body)
+
+    def test_submit_checks_the_mode_and_keeps_the_views(self):
+        with self.backend(), mock.patch.multiple(self.server, JOBS={}, QUEUE_ORDER=[], QUEUE=mock.Mock(),
+                                                 PIPES=mock.Mock(mesh=object(), image=None)):
+            with self.assertRaisesRegex(ValueError, "multiview_mode"):
+                self.server.submit({"kind": "mesh", "image": self.b64(), "params": {"multiview_mode": "x"}})
+            job = self.server.submit({"kind": "mesh", "images": [{"image": self.b64()}] * 3,
+                                      "params": {"multiview_mode": "multidiffusion"}})
+            self.assertEqual(job.info()["views"], 3)
+
+    def test_info_tells_what_the_pod_takes(self):
+        with self.backend("hunyuan", mv=True):
+            self.assertEqual(self.server.view_limits(), (4, ("front", "left", "back", "right")))
+        with self.backend("hunyuan"):
+            self.assertEqual(self.server.view_limits(), (1, None))
+        with self.backend():
+            self.assertEqual(self.server.view_limits(), (8, None))
+
+    # --- TRELLIS.2 ---
+
+    def fake_pipe(self):
+        """A pipeline whose samplers record which view each step saw."""
+        seen = []
+
+        class Sampler:
+            def _inference_model(self, flow, x_t, t, cond=None, **kwargs):
+                seen.append((list(cond), kwargs.get("neg_cond")))
+                return cond[0] * 10
+
+        class Pipe:
+            sparse_structure_sampler = Sampler()
+            shape_slat_sampler = Sampler()
+            tex_slat_sampler = shape_slat_sampler            # shared: patched once
+
+            def get_cond(self, images, resolution, include_neg_cond=True):
+                return {"cond": list(images), "neg_cond": ["neg"] * len(images)}
+
+        return Pipe(), seen
+
+    def test_stochastic_gives_each_step_one_view(self):
+        pipe, seen = self.fake_pipe()
+        with self.server.trellis_multiview(pipe, [1, 2, 3], "stochastic"):
+            cond = pipe.get_cond(["ignored"], 512)
+            self.assertEqual(cond, {"cond": [1, 2, 3], "neg_cond": ["neg"]})
+            sampler = pipe.sparse_structure_sampler
+            outs = [sampler._inference_model("flow", "x", .5, cond["cond"], neg_cond="n") for _ in range(4)]
+        self.assertEqual(outs, [10, 20, 30, 10])
+        self.assertEqual([s[0] for s in seen], [[1], [2], [3], [1]])
+        self.assertEqual(seen[0][1], "n")                        # guidance arguments pass through
+        self.assertNotIn("_inference_model", vars(pipe.sparse_structure_sampler))   # restored
+        self.assertNotIn("get_cond", vars(pipe))
+
+    def test_multidiffusion_averages_every_view(self):
+        pipe, seen = self.fake_pipe()
+        with self.server.trellis_multiview(pipe, [1, 2, 3], "multidiffusion"):
+            out = pipe.shape_slat_sampler._inference_model("flow", "x", .5, [1, 2, 3])
+        self.assertEqual(out, 20)
+        self.assertEqual(len(seen), 3)
+
+    def test_restored_after_a_failure_and_bad_mode(self):
+        pipe, _ = self.fake_pipe()
+        with self.assertRaises(RuntimeError):
+            with self.server.trellis_multiview(pipe, [1, 2], "stochastic"):
+                raise RuntimeError("OOM")
+        self.assertNotIn("_inference_model", vars(pipe.sparse_structure_sampler))
+        with self.assertRaisesRegex(ValueError, "multiview_mode"):
+            with self.server.trellis_multiview(pipe, [1, 2], "best"):
+                pass
+
+    def test_make_mesh_trellis_with_views(self):
+        pipe = mock.Mock()
+        pipe.preprocess_image.side_effect = lambda im: "pre-" + im
+        pipe.run.side_effect = RuntimeError("stop after run")    # what follows needs o_voxel
+        fake_o_voxel = types.ModuleType("o_voxel")
+        with mock.patch.dict(sys.modules, {"o_voxel": fake_o_voxel}), \
+                mock.patch.object(self.server, "PIPES", mock.Mock(mesh=pipe)), \
+                mock.patch.object(self.server, "trellis_multiview") as multiview:
+            with self.assertRaisesRegex(RuntimeError, "stop after run"):
+                self.server.make_mesh_trellis([(None, "a"), (None, "b")],
+                                              {"multiview_mode": "stochastic", "seed": 3}, "out.glb")
+        multiview.assert_called_once_with(pipe, ["pre-a", "pre-b"], "stochastic")
+        args, kwargs = pipe.run.call_args
+        self.assertEqual(args, ("pre-a",))
+        self.assertFalse(kwargs["preprocess_image"])
+
+    # --- the client ---
+
+    def test_view_args(self):
+        self.assertEqual(jobs.view_arg("front=a.png"), ("front", "a.png"))
+        self.assertEqual(jobs.view_arg("Back=C:\\x\\b.png"), ("back", "C:\\x\\b.png"))
+        self.assertEqual(jobs.view_arg("C:\\x\\a=b.png"), (None, "C:\\x\\a=b.png"))
+        self.assertEqual(jobs.view_arg("a.png"), (None, "a.png"))
+
+    def cmd_mesh(self, images, served, **flags):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        paths = []
+        for name in images:
+            view, _, file = name.rpartition("=")
+            path = Path(tmp.name) / file
+            path.write_bytes(b"\x89PNG" + file.encode())
+            paths.append(f"{view}={path}" if view else str(path))
+        args = mock.Mock(images=paths, prompt=None, views=flags.get("views", False),
+                         view_mode=flags.get("view_mode"), out_dir=tmp.name, seed=None,
+                         texture_size=None, decimation_target=None, no_remesh=False, no_texture=False)
+        with mock.patch.object(cli, "ensure_pod", return_value={"profile": "p"}), \
+                mock.patch.object(cli, "job_target", return_value=("u", "k", served)), \
+                mock.patch.object(cli, "run_job") as run_job, mock.patch.object(cli.ui, "hint"):
+            cli.cmd_mesh(args, mock.Mock())
+        return run_job
+
+    def test_kami_mesh_views_is_one_job(self):
+        run_job = self.cmd_mesh(["a.png", "b.png", "c.png"], {"mesh_model": "m", "max_views": 8},
+                                views=True, view_mode="multidiffusion")
+        run_job.assert_called_once()
+        body = run_job.call_args.args[2]
+        self.assertEqual(len(body["images"]), 3)
+        self.assertEqual(body["params"]["multiview_mode"], "multidiffusion")
+        self.assertEqual(body["name"], "a")
+
+    def test_named_views_imply_views(self):
+        run_job = self.cmd_mesh(["front=a.png", "back=b.png"],
+                                {"mesh_model": "m", "max_views": 4, "view_names": ["front", "left", "back", "right"]})
+        body = run_job.call_args.args[2]
+        self.assertEqual([i["view"] for i in body["images"]], ["front", "back"])
+
+    def test_without_views_one_job_per_image(self):
+        run_job = self.cmd_mesh(["a.png", "b.png"], {"mesh_model": "m", "max_views": 8})
+        self.assertEqual(run_job.call_count, 2)
+
+    def test_views_refused_where_the_pod_cannot(self):
+        with self.assertRaisesRegex(ConfigError, "one image"):
+            self.cmd_mesh(["a.png", "b.png"], {"mesh_model": "m", "max_views": 1}, views=True)
+        with self.assertRaisesRegex(ConfigError, "predates"):
+            self.cmd_mesh(["a.png", "b.png"], {"mesh_model": "m"}, views=True)
+        with self.assertRaisesRegex(ConfigError, "two or more"):
+            self.cmd_mesh(["a.png"], {"mesh_model": "m", "max_views": 8}, views=True)
+
+    def test_the_page_sends_views_as_one_job(self):
+        image = {"name": "a.png", "data": self.b64()}
+        bodies = webui.build_bodies({"kind": "mesh", "views": True,
+                                     "images": [dict(image, view="front"), dict(image, name="b.png")],
+                                     "params": {"multiview_mode": "multidiffusion"}})
+        self.assertEqual(len(bodies), 1)
+        label, body = bodies[0]
+        self.assertIn("2 views", label)
+        self.assertEqual([i["view"] for i in body["images"]], ["front", None])
+        self.assertEqual(len(webui.build_bodies({"kind": "mesh", "images": [image, image]})), 2)
+        for bad in ({"views": True, "images": [dict(image, view="top")]},
+                    {"images": [image], "params": {"multiview_mode": "best"}}):
+            with self.assertRaises(ValueError):
+                webui.build_bodies({"kind": "mesh", **bad})
+
+
+class Hunyuan(unittest.TestCase):
+    """Hunyuan3D-2 profiles: licence, repos, pod env."""
+
+    def load(self, extra):
+        text = MINIMAL + f"""
+[profiles.hy]
+mesh_model = "tencent/Hunyuan3D-2mv"
+gpus = ["RTX 4090"]
+{extra}
+"""
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "kami.toml"
+            path.write_text(text, encoding="utf-8")
+            return config.load_config(path)
+
+    def test_the_licence_must_be_accepted(self):
+        with self.assertRaisesRegex(ConfigError, "European Union.*accept_hunyuan_license"):
+            self.load("")
+        cfg = self.load("accept_hunyuan_license = true")
+        self.assertTrue(cfg.profiles["hy"].accept_hunyuan_license)
+
+    def test_repos_are_the_folders_it_downloads(self):
+        p = self.load("accept_hunyuan_license = true").profiles["hy"]
+        self.assertEqual(p.mesh_backend, "hunyuan")
+        self.assertEqual(p.repos, ["tencent/Hunyuan3D-2mv/hunyuan3d-dit-v2-mv",
+                                   "tencent/Hunyuan3D-2/hunyuan3d-paint-v2-0-turbo",
+                                   "tencent/Hunyuan3D-2/hunyuan3d-delight-v2-0", "briaai/RMBG-2.0"])
+        other = self.load('accept_hunyuan_license = true\nmesh_subfolder = "custom"').profiles["hy"]
+        self.assertEqual(other.repos[0], "tencent/Hunyuan3D-2mv/custom")
+
+    def test_download_counts_only_the_folder(self):
+        files = (("hunyuan3d-dit-v2-mv/model.fp16.safetensors", 5), ("hunyuan3d-dit-v2-0/model.safetensors", 7),
+                 ("README.md", 1))
+        with mock.patch.object(fit, "repo_files", return_value=files):
+            self.assertEqual(fit.entry_files("tencent/Hunyuan3D-2mv/hunyuan3d-dit-v2-mv"),
+                             [("hunyuan3d-dit-v2-mv/model.fp16.safetensors", 5)])
+            self.assertEqual(len(fit.entry_files("tencent/Hunyuan3D-2mv")), 2)
+        self.assertEqual(fit.split_repo("a/b/c/d"), ("a/b", "c/d"))
+
+    def test_the_pod_gets_the_backend(self):
+        cfg = self.load("accept_hunyuan_license = true")
+        env = pod.server_spec(cfg, cfg.profiles["hy"], None, "key")[0]
+        self.assertEqual((env["KAMI_MESH_BACKEND"], env["KAMI_MESH_SUBFOLDER"], env["KAMI_PAINT_MODEL"]),
+                         ("hunyuan", "hunyuan3d-dit-v2-mv", "tencent/Hunyuan3D-2"))
+        trellis = pod.server_spec(cfg, cfg.profiles["main"], None, "key")[0]
+        self.assertNotIn("KAMI_MESH_BACKEND", trellis)
