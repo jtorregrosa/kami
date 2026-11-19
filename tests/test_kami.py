@@ -2485,6 +2485,55 @@ class MultiView(unittest.TestCase):
 class Hunyuan(unittest.TestCase):
     """Hunyuan3D-2 profiles: licence, repos, pod env."""
 
+    def test_only_the_images_hunyuan_pipeline_code_is_trusted(self):
+        from kami import server
+        seen = []
+
+        class DiffusionPipeline:
+            @classmethod
+            def from_pretrained(cls, path, **kwargs):
+                seen.append(kwargs.get("trust_remote_code"))
+                return cls
+        fake = types.ModuleType("diffusers")
+        fake.DiffusionPipeline = DiffusionPipeline
+        with mock.patch.dict(sys.modules, {"diffusers": fake}), \
+                mock.patch.object(server.os.path, "realpath", side_effect=lambda p: p):
+            with server.trust_hunyuan_pipelines():
+                DiffusionPipeline.from_pretrained(
+                    "ckpt", custom_pipeline="/opt/Hunyuan3D-2/hy3dgen/texgen/hunyuanpaint")
+                DiffusionPipeline.from_pretrained("ckpt", custom_pipeline="/tmp/other")
+                DiffusionPipeline.from_pretrained("ckpt")
+            DiffusionPipeline.from_pretrained(
+                "ckpt", custom_pipeline="/opt/Hunyuan3D-2/hy3dgen/texgen/hunyuanpaint")
+        self.assertEqual(seen, [True, None, None, None])
+
+    def test_dinov2_weights_get_the_transformers_5_names(self):
+        from kami import server
+
+        class Halves(list):
+            def chunk(self, n, dim=0):
+                half = len(self) // n
+                return Halves(self[:half]), Halves(self[half:])
+        prefix = "main_image_encoder.model.encoder.layer.0."
+        old = {prefix + "attention.attention.query.weight": "q",
+               prefix + "attention.output.dense.bias": "o",
+               prefix + "mlp.weights_in.weight": Halves([1, 2, 3, 4]),
+               prefix + "mlp.weights_out.weight": "d",
+               prefix + "norm1.weight": "n"}
+        expected = [prefix + "attention.q_proj.weight", prefix + "mlp.gate_proj.weight"]
+        new = server.dinov2_v5_state(old, expected)
+        self.assertEqual(new[prefix + "attention.q_proj.weight"], "q")
+        self.assertEqual(new[prefix + "attention.o_proj.bias"], "o")
+        self.assertEqual(new[prefix + "mlp.gate_proj.weight"], [1, 2])
+        self.assertEqual(new[prefix + "mlp.up_proj.weight"], [3, 4])
+        self.assertEqual(new[prefix + "mlp.down_proj.weight"], "d")
+        self.assertEqual(new[prefix + "norm1.weight"], "n")
+        self.assertNotIn(prefix + "mlp.weights_in.weight", new)
+        # a module that still uses the old names, or a checkpoint without DINOv2: untouched
+        self.assertIs(server.dinov2_v5_state(old, list(old)), old)
+        other = {"blocks.0.weight": 1}
+        self.assertIs(server.dinov2_v5_state(other, expected), other)
+
     def load(self, extra):
         text = MINIMAL + f"""
 [profiles.hy]

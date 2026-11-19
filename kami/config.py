@@ -279,7 +279,10 @@ RANGES = {"port": (1, 65535), "volume_size_gb": (1, None), "disk_gb": (1, None),
 
 # Job parameters a profile's defaults may set (see server.py).
 IMAGE_PARAMS = ("steps", "guidance", "width", "height", "negative", "seed")
-MESH_PARAMS = ("texture_size", "decimation_target", "remesh", "seed", "pipeline_type")
+# Both backends: TRELLIS.2 (texture_size, remesh, pipeline_type, multiview_mode) and
+# Hunyuan3D-2 (steps, octree_resolution, guidance, texture); each ignores the others.
+MESH_PARAMS = ("texture_size", "decimation_target", "remesh", "seed", "pipeline_type",
+               "multiview_mode", "steps", "octree_resolution", "guidance", "texture")
 
 
 def _kind_ok(value, kind: str) -> bool:

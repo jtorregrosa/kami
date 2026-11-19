@@ -84,8 +84,10 @@ The client side is unit-tested with mocks. Verified on a real 4090 pod: the Dock
 TRELLIS.2 with `dino_model` (transformers 5 layout aliased by `fit_transformers`), and an
 image -> GLB job end to end (PNG textures). Not run on a real GPU yet: `offload` moving the
 pipelines between CPU and GPU, Z-Image-Turbo, text-to-mesh, `kami reload`, the job
-progress hooks, TRELLIS.2 multiview, the whole Hunyuan3D-2 path (image never built:
-hy3dgen against transformers 5 / diffusers 0.36 is untested), and the guard deleting the pod through GraphQL (the pod-scoped key got 403
+progress hooks, TRELLIS.2 multiview, a whole Hunyuan3D-2 job (the -hunyuan image builds
+and its pipelines load on a 4090, with `dinov2_v4_checkpoints` and
+`trust_hunyuan_pipelines`; the first jobs failed in pymeshlab, whose plugins needed
+libOpenGL.so.0, now in the image: shape clean-up and Hunyuan3D-Paint never ran), and the guard deleting the pod through GraphQL (the pod-scoped key got 403
 from api.runpod.io/v2 and rest.runpod.io did not resolve: the old guard never deleted it).
 Check them on the next pod (`kami up --keep-on-failure`, `kami logs`).
 

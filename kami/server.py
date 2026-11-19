@@ -200,6 +200,78 @@ class Pipelines:
         self.on_gpu = which
 
 
+# transformers 5 renamed DINOv2's weights; its from_pretrained converts old checkpoints,
+# but hy3dgen builds Dinov2Model(config) and calls load_state_dict with the transformers 4
+# names. The same renames as transformers' conversion_mapping ("Dinov2Model").
+DINOV2_RENAMES = (("attention.attention.query.", "attention.q_proj."),
+                  ("attention.attention.key.", "attention.k_proj."),
+                  ("attention.attention.value.", "attention.v_proj."),
+                  ("attention.output.dense.", "attention.o_proj."),
+                  ("mlp.weights_out.", "mlp.down_proj."))
+
+
+def dinov2_v5_state(state, expected):
+    """`state` (a transformers 4 DINOv2 checkpoint, possibly inside a bigger model) with the
+    transformers 5 names, when `expected` (the module's own keys) uses them; else as it is.
+    mlp.weights_in is split in two: the first half is gate_proj, the second up_proj."""
+    if not any(".q_proj." in k or ".gate_proj." in k for k in expected) or not any(
+            "attention.attention.query." in k or "mlp.weights_in." in k for k in state):
+        return state
+    out = type(state)()
+    for key, value in state.items():
+        if "mlp.weights_in." in key:
+            gate, up = value.chunk(2, dim=0)
+            out[key.replace("mlp.weights_in.", "mlp.gate_proj.")] = gate
+            out[key.replace("mlp.weights_in.", "mlp.up_proj.")] = up
+            continue
+        for old, new in DINOV2_RENAMES:
+            key = key.replace(old, new)
+        out[key] = value
+    return out
+
+
+@contextlib.contextmanager
+def dinov2_v4_checkpoints():
+    """While loading hy3dgen: load_state_dict converts transformers 4 DINOv2 weights."""
+    import torch
+    original = torch.nn.Module.load_state_dict
+
+    def load_state_dict(module, state_dict, *args, **kwargs):
+        converted = dinov2_v5_state(state_dict, module.state_dict().keys())
+        if converted is not state_dict:
+            log(f"{type(module).__name__}: DINOv2 weights renamed for transformers 5")
+        return original(module, converted, *args, **kwargs)
+    torch.nn.Module.load_state_dict = load_state_dict
+    try:
+        yield
+    finally:
+        torch.nn.Module.load_state_dict = original
+
+
+HUNYUAN_CODE = "/opt/Hunyuan3D-2"      # the image's clone, at a pinned commit
+
+
+@contextlib.contextmanager
+def trust_hunyuan_pipelines():
+    """While loading Hunyuan3D-Paint: newer diffusers runs a local `custom_pipeline` only
+    with trust_remote_code=True. Given only for hy3dgen's own pipeline code, which is the
+    image's pinned clone, not code downloaded at run time."""
+    from diffusers import DiffusionPipeline
+    original = DiffusionPipeline.__dict__["from_pretrained"]
+    load = original.__func__
+
+    def from_pretrained(cls, *args, **kwargs):
+        custom = kwargs.get("custom_pipeline")
+        if isinstance(custom, str) and os.path.realpath(custom).startswith(HUNYUAN_CODE + "/"):
+            kwargs.setdefault("trust_remote_code", True)
+        return load(cls, *args, **kwargs)
+    DiffusionPipeline.from_pretrained = classmethod(from_pretrained)
+    try:
+        yield
+    finally:
+        DiffusionPipeline.from_pretrained = original
+
+
 class HunyuanMesh:
     """Hunyuan3D-2: its shape model (one image, or named views with -2mv), Hunyuan3D-Paint
     for the texture, and RMBG-2.0 for the background (the BiRefNet TRELLIS.2 brings)."""
@@ -208,9 +280,10 @@ class HunyuanMesh:
         from hy3dgen.shapegen import Hunyuan3DDiTFlowMatchingPipeline
         from hy3dgen.texgen import Hunyuan3DPaintPipeline
         from trellis2.pipelines.rembg import BiRefNet
-        self.shape = Hunyuan3DDiTFlowMatchingPipeline.from_pretrained(
-            MESH_MODEL, subfolder=MESH_SUBFOLDER, variant="fp16")
-        self.paint = Hunyuan3DPaintPipeline.from_pretrained(PAINT_MODEL)
+        with dinov2_v4_checkpoints(), trust_hunyuan_pipelines():
+            self.shape = Hunyuan3DDiTFlowMatchingPipeline.from_pretrained(
+                MESH_MODEL, subfolder=MESH_SUBFOLDER, variant="fp16")
+            self.paint = Hunyuan3DPaintPipeline.from_pretrained(PAINT_MODEL)
         self.rembg = BiRefNet(model_name=REMBG_MODEL or "briaai/RMBG-2.0")
         self.rembg.cuda()
 
