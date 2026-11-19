@@ -111,8 +111,18 @@ kami mesh --prompt "a ceramic owl, studio light"      # text -> image -> mesh
 ```
 
 Results go to `output_dir` (`kami-out/` by default, or `-o DIR`). kami never overwrites a
-file: a second `photo.glb` becomes `photo-2.glb`. Open GLBs in Blender, Windows 3D Viewer
-or [an online glTF viewer](https://gltf-viewer.donmccurdy.com).
+file: a second `photo.glb` becomes `photo-2.glb`.
+
+**`kami ui`** does all of this from a web page on your PC: drop images to make meshes,
+write prompts to make images (or meshes from text), follow the jobs, and browse every
+result, with meshes in an interactive 3D viewer (rotate, zoom, full size) next to the
+image they came from. It shows the pod's cost and the guard's deadline, and can delete
+the pod. It never starts one: run `kami up` first (browsing needs no pod).
+
+The page is served on 127.0.0.1 only, and only that page can act: other sites cannot
+send jobs or delete the pod. kami relays the jobs, so the pod's key never reaches the
+browser. The 3D viewer ([model-viewer](https://modelviewer.dev)) loads from a CDN.
+Blender opens the GLBs too.
 
 If the cloud has no stock, `kami up` **waits** for it (nothing is billed while waiting).
 `--secure` also tries secure cloud, `--max-wait MINUTES` gives up.
@@ -130,6 +140,7 @@ If the cloud has no stock, `kami up` **waits** for it (nothing is billed while w
 | `kami mesh IMAGE...` | Image(s) → textured GLB (`--seed`, `--texture-size`, `--decimation-target`, `--no-remesh`) |
 | `kami mesh --prompt TEXT` | Text → image → GLB (needs a profile with both models) |
 | `kami image PROMPT` | Text → PNG (`-n`, `--seed`, `--steps`, `--guidance`, `--width`, `--height`) |
+| `kami ui [FOLDER]` | Web page on this PC: make meshes and images on the pod, browse the results (`--port`, `--no-browser`) |
 | `kami status` | Pod state, cost so far, guard, jobs done (`--json`; exit 0 ready, 2 not ready, 3 no pod) |
 | `kami logs` | Stream the pod logs (`--no-follow`, `-n`) |
 | `kami down` | Delete the pod (a network volume is kept) |

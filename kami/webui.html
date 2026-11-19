@@ -1,0 +1,527 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="kami-token" content="{{TOKEN}}">
+<title>kami</title>
+<script type="module" src="{{MODEL_VIEWER}}"></script>
+<style>
+:root {
+  --bg: #f6f5f2; --panel: #ffffff; --text: #1d1d1f; --dim: #6e6e73; --line: #e3e1dc;
+  --accent: #c2410c; --accent-text: #ffffff; --stage: #eceae5; --ok: #15803d; --warn: #b45309;
+  --bad: #b91c1c; --field: #ffffff;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #141414; --panel: #1e1e1e; --text: #ececec; --dim: #9a9a9a; --line: #2e2e2e;
+    --accent: #fb923c; --accent-text: #1a1a1a; --stage: #262626; --ok: #4ade80; --warn: #fbbf24;
+    --bad: #f87171; --field: #161616;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text);
+       font: 15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+code { font: 13px ui-monospace, "Cascadia Code", Consolas, monospace; background: var(--stage);
+       padding: 1px 5px; border-radius: 4px; }
+button, input, select, textarea { font: inherit; color: inherit; }
+.wrap { max-width: 1280px; margin: 0 auto; padding: 0 24px; }
+
+/* header: the pod */
+header { position: sticky; top: 0; z-index: 5; background: var(--bg);
+         border-bottom: 1px solid var(--line); }
+header .wrap { display: flex; gap: 16px; align-items: center; min-height: 56px; flex-wrap: wrap;
+               padding-top: 8px; padding-bottom: 8px; }
+h1 { margin: 0; font-size: 20px; letter-spacing: .02em; }
+.pod { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; flex: 1; min-width: 0; }
+.dot { width: 9px; height: 9px; border-radius: 50%; background: var(--dim); flex: none; }
+.dot.ready { background: var(--ok); } .dot.busy { background: var(--warn); } .dot.bad { background: var(--bad); }
+.pod .what { font-weight: 500; }
+.pod .meta { color: var(--dim); font-size: 13px; }
+.btn { border: 1px solid var(--line); background: var(--panel); border-radius: 8px;
+       padding: 6px 12px; cursor: pointer; }
+.btn:hover { border-color: var(--dim); }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text);
+               font-weight: 600; padding: 8px 16px; }
+.btn.primary:disabled { opacity: .45; cursor: not-allowed; }
+.btn.danger { color: var(--bad); }
+.btn.danger.armed { background: var(--bad); border-color: var(--bad); color: #fff; }
+
+/* create */
+section { margin: 20px 0; }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; }
+.tabs { display: flex; gap: 4px; padding: 6px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+.tab { border: 0; background: none; padding: 7px 12px; border-radius: 8px; cursor: pointer; color: var(--dim); }
+.tab[aria-selected="true"] { background: var(--stage); color: var(--text); font-weight: 500; }
+.tab:disabled { opacity: .4; cursor: not-allowed; }
+.form { padding: 16px; display: grid; gap: 14px; }
+.form[hidden] { display: none; }
+.blocked { padding: 18px 16px; color: var(--dim); }
+.drop { border: 1.5px dashed var(--line); border-radius: 10px; padding: 18px; text-align: center;
+        color: var(--dim); cursor: pointer; background: var(--stage); }
+.drop.over { border-color: var(--accent); color: var(--text); }
+.thumbs { display: flex; gap: 8px; flex-wrap: wrap; }
+.thumb { position: relative; width: 84px; height: 84px; border-radius: 8px; overflow: hidden;
+         background: var(--stage); border: 1px solid var(--line); }
+.thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.thumb button { position: absolute; top: 3px; right: 3px; width: 22px; height: 22px; border: 0;
+                border-radius: 6px; background: rgba(0,0,0,.6); color: #fff; cursor: pointer; line-height: 1; }
+textarea { width: 100%; min-height: 72px; resize: vertical; padding: 10px; border-radius: 8px;
+           border: 1px solid var(--line); background: var(--field); }
+.opts { display: flex; gap: 12px; flex-wrap: wrap; align-items: end; }
+.opts label { display: grid; gap: 3px; font-size: 13px; color: var(--dim); }
+.opts input, .opts select { width: 120px; padding: 6px 8px; border-radius: 7px;
+                            border: 1px solid var(--line); background: var(--field); }
+.opts label.check { display: flex; align-items: center; gap: 6px; padding-bottom: 6px; }
+.opts label.check input { width: auto; }
+details summary { cursor: pointer; color: var(--dim); font-size: 13px; }
+details .opts { margin-top: 10px; }
+.actions { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+.notice { font-size: 13px; color: var(--dim); }
+.notice.bad { color: var(--bad); }
+
+/* jobs */
+.jobs { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.job { display: grid; grid-template-columns: auto 1fr auto; gap: 4px 10px; align-items: center;
+       background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px; }
+.job .label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.job .state { font-size: 13px; color: var(--dim); white-space: nowrap; }
+.job .detail { grid-column: 2 / -1; font-size: 13px; color: var(--dim); }
+.job .detail.bad { color: var(--bad); }
+.job .detail a { color: var(--text); }
+.spin { width: 9px; height: 9px; border-radius: 50%; border: 2px solid var(--warn);
+        border-right-color: transparent; animation: spin 1s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .spin { animation: none; } }
+
+/* gallery */
+.head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
+h2 { margin: 0; font-size: 16px; }
+.head .meta { color: var(--dim); font-size: 13px; overflow-wrap: anywhere; }
+.grid { display: grid; gap: 16px; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); }
+.card { margin: 0; background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+        overflow: hidden; display: flex; flex-direction: column; }
+.media { position: relative; aspect-ratio: 1; background: var(--stage); }
+.media img, .media model-viewer { width: 100%; height: 100%; display: block; object-fit: contain; }
+model-viewer { --poster-color: transparent; }
+.grow { position: absolute; top: 8px; right: 8px; border: 0; border-radius: 8px; width: 32px;
+        height: 32px; background: rgba(0,0,0,.45); color: #fff; font-size: 16px; cursor: pointer;
+        opacity: 0; transition: opacity .15s; }
+.card:hover .grow, .grow:focus-visible { opacity: 1; }
+figcaption { padding: 10px 12px 12px; display: grid; grid-template-columns: auto 1fr; gap: 2px 8px;
+             align-items: center; }
+.badge { font-size: 11px; font-weight: 600; color: var(--accent); border: 1px solid currentColor;
+         border-radius: 4px; padding: 0 5px; }
+.name { color: var(--text); text-decoration: none; font-weight: 500; overflow: hidden;
+        text-overflow: ellipsis; white-space: nowrap; }
+.name:hover { text-decoration: underline; }
+figcaption .meta { grid-column: 1 / -1; color: var(--dim); font-size: 13px; }
+figcaption .meta a { color: var(--dim); }
+.empty { grid-column: 1 / -1; color: var(--dim); padding: 40px 0; text-align: center; }
+.card.full { position: fixed; inset: 16px; z-index: 20; box-shadow: 0 10px 40px rgba(0,0,0,.35); }
+.card.full .media { aspect-ratio: auto; flex: 1; }
+.card.full .grow { opacity: 1; }
+body.has-full::before { content: ""; position: fixed; inset: 0; background: rgba(0,0,0,.5); z-index: 19; }
+
+@media (max-width: 640px) {
+  .wrap { padding: 0 16px; }
+  .grid { grid-template-columns: 1fr; }
+  .opts input, .opts select { width: 104px; }
+}
+</style>
+</head>
+<body>
+<header>
+  <div class="wrap">
+    <h1>kami</h1>
+    <div class="pod" id="pod" aria-live="polite">
+      <span class="dot" id="pod-dot"></span>
+      <span class="what" id="pod-what">Checking the pod…</span>
+      <span class="meta" id="pod-meta"></span>
+    </div>
+    <button type="button" class="btn danger" id="down" hidden>Delete pod</button>
+  </div>
+</header>
+
+<main class="wrap">
+  <section>
+    <div class="panel">
+      <div class="tabs" role="tablist">
+        <button type="button" class="tab" role="tab" data-tab="mesh" aria-selected="true">Image → mesh</button>
+        <button type="button" class="tab" role="tab" data-tab="image" aria-selected="false">Text → image</button>
+        <button type="button" class="tab" role="tab" data-tab="text-to-mesh" aria-selected="false">Text → mesh</button>
+      </div>
+      <p class="blocked" id="blocked">Checking the pod…</p>
+
+      <form class="form" data-form="mesh" hidden>
+        <div class="drop" id="drop" tabindex="0" role="button">
+          Drop images here, paste them, or click to choose (PNG, JPG, WebP).
+          A PNG with transparency skips the background removal.
+        </div>
+        <input type="file" id="files" accept=".png,.jpg,.jpeg,.webp" multiple hidden>
+        <div class="thumbs" id="thumbs"></div>
+        <details>
+          <summary>Options</summary>
+          <div class="opts">
+            <label>Seed<input name="seed" type="number" placeholder="random"></label>
+            <label>Texture<select name="texture_size"><option value="">default</option>
+              <option>1024</option><option>2048</option><option>4096</option></select></label>
+            <label>Faces<input name="decimation_target" type="number" min="1000" step="1000" placeholder="default"></label>
+            <label class="check"><input name="remesh" type="checkbox" checked>Remesh</label>
+          </div>
+        </details>
+        <div class="actions">
+          <button type="submit" class="btn primary">Make mesh</button>
+          <span class="notice" data-notice></span>
+        </div>
+      </form>
+
+      <form class="form" data-form="image" hidden>
+        <textarea name="prompt" placeholder="A ceramic owl on a wooden shelf, studio light" required></textarea>
+        <div class="opts">
+          <label>Images<input name="count" type="number" min="1" max="8" value="1"></label>
+          <label>Seed<input name="seed" type="number" placeholder="random"></label>
+        </div>
+        <details>
+          <summary>Options</summary>
+          <div class="opts">
+            <label>Steps<input name="steps" type="number" min="1" placeholder="default"></label>
+            <label>Guidance<input name="guidance" type="number" step="0.1" min="0" placeholder="default"></label>
+            <label>Width<input name="width" type="number" step="64" min="256" placeholder="1024"></label>
+            <label>Height<input name="height" type="number" step="64" min="256" placeholder="1024"></label>
+          </div>
+        </details>
+        <div class="actions">
+          <button type="submit" class="btn primary">Make image</button>
+          <span class="notice" data-notice></span>
+        </div>
+      </form>
+
+      <form class="form" data-form="text-to-mesh" hidden>
+        <textarea name="prompt" placeholder="A ceramic owl, full body, plain background" required></textarea>
+        <div class="opts">
+          <label>Seed<input name="seed" type="number" placeholder="random"></label>
+        </div>
+        <details>
+          <summary>Options</summary>
+          <div class="opts">
+            <label>Texture<select name="texture_size"><option value="">default</option>
+              <option>1024</option><option>2048</option><option>4096</option></select></label>
+            <label>Faces<input name="decimation_target" type="number" min="1000" step="1000" placeholder="default"></label>
+            <label class="check"><input name="remesh" type="checkbox" checked>Remesh</label>
+          </div>
+        </details>
+        <div class="actions">
+          <button type="submit" class="btn primary">Make mesh</button>
+          <span class="notice" data-notice></span>
+        </div>
+      </form>
+    </div>
+  </section>
+
+  <section id="jobs-section" hidden>
+    <div class="head"><h2>Jobs</h2><span class="meta">sent from this page</span></div>
+    <ul class="jobs" id="jobs"></ul>
+  </section>
+
+  <section>
+    <div class="head"><h2>Results</h2><span class="meta">{{FOLDER}}</span></div>
+    <div class="grid" id="gallery">{{GALLERY}}</div>
+  </section>
+</main>
+
+<script>
+"use strict";
+const TOKEN = document.querySelector('meta[name="kami-token"]').content;
+let signature = "{{SIGNATURE}}";
+let pod = null;            // the last /api/state pod info
+let tab = "mesh";
+const images = [];         // {name, data (base64), url}
+
+const $ = (sel, root = document) => root.querySelector(sel);
+const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
+
+function money(x) { return typeof x === "number" ? "$" + x.toFixed(2) : "?"; }
+function minutes(s) {
+  s = Math.max(0, Math.round(s));
+  if (s < 3600) return Math.round(s / 60) + " min";
+  return Math.floor(s / 3600) + " h " + String(Math.round((s % 3600) / 60)).padStart(2, "0") + " min";
+}
+
+async function post(path, body) {
+  const r = await fetch(path, {method: "POST", body: JSON.stringify(body),
+                               headers: {"Content-Type": "application/json", "X-Kami-Token": TOKEN}});
+  let data = {};
+  try { data = await r.json(); } catch (e) {}
+  if (!r.ok) throw new Error(data.error || ("HTTP " + r.status));
+  return data;
+}
+
+/* --- the pod --- */
+function served() { return (pod && pod.served) || {}; }
+function ready() { return !!(pod && pod.pod && pod.ready); }
+
+function renderPod() {
+  const dot = $("#pod-dot"), what = $("#pod-what"), meta = $("#pod-meta"), down = $("#down");
+  dot.className = "dot";
+  meta.textContent = "";
+  down.hidden = true;
+  const p = pod && pod.pod;
+  if (!pod) { what.textContent = "Checking the pod…"; return; }
+  if (pod.error && !p) { dot.classList.add("bad"); what.textContent = "Cannot read the pod: " + pod.error; return; }
+  if (!p) {
+    what.textContent = pod.waiting ? "Waiting for GPU stock (kami up)" : "No pod";
+    if (pod.waiting) dot.classList.add("busy");
+    return;
+  }
+  down.hidden = false;
+  if (p.status === "GONE") { dot.classList.add("bad"); what.textContent = "The pod no longer exists"; return; }
+  dot.classList.add(pod.ready ? "ready" : "busy");
+  what.textContent = (p.profile || "pod") + " · " + (p.gpu || "GPU") + (pod.ready ? "" : " · starting");
+  const bits = [];
+  if (typeof p.cost_per_hour === "number") bits.push(money(p.cost_per_hour) + "/h");
+  if (typeof p.session_cost_estimate === "number") bits.push("≈ " + money(p.session_cost_estimate) + " so far");
+  const g = p.guard || {};
+  if (g.deadline) bits.push("guard deletes it in " + minutes(g.deadline - Date.now() / 1000));
+  if (g.idle_minutes) bits.push("or after " + g.idle_minutes + " min idle");
+  meta.textContent = bits.join(" · ");
+}
+
+function renderForms() {
+  const s = served(), blocked = $("#blocked");
+  const can = {"mesh": !!s.mesh_model, "image": !!s.image_model,
+               "text-to-mesh": !!(s.mesh_model && s.image_model)};
+  if (!ready()) {
+    const p = pod && pod.pod;
+    blocked.innerHTML = "";
+    blocked.append(p ? "The pod is starting; this unlocks when it is ready (" : "No pod is running. In a terminal: ");
+    const code = document.createElement("code");
+    code.textContent = p ? "kami status" : "kami up";
+    blocked.append(code, p ? ")." : " (or kami up -p studio for both models). Browsing the results needs no pod.");
+    blocked.hidden = false;
+    $$(".form").forEach(f => f.hidden = true);
+    $$(".tab").forEach(t => t.disabled = false);
+    return;
+  }
+  $$(".tab").forEach(t => {
+    t.disabled = !can[t.dataset.tab];
+    t.title = t.disabled ? "This pod's profile does not serve it" : "";
+  });
+  if (!can[tab]) tab = Object.keys(can).find(k => can[k]) || tab;
+  blocked.hidden = true;
+  $$(".tab").forEach(t => t.setAttribute("aria-selected", String(t.dataset.tab === tab)));
+  $$(".form").forEach(f => f.hidden = f.dataset.form !== tab);
+}
+
+let armedAt = 0;
+$("#down").addEventListener("click", async () => {
+  const b = $("#down");
+  if (Date.now() - armedAt > 4000) {          // two clicks: no browser dialog
+    armedAt = Date.now();
+    b.classList.add("armed");
+    b.textContent = "Click again to delete it";
+    setTimeout(() => { if (Date.now() - armedAt >= 4000) { b.classList.remove("armed"); b.textContent = "Delete pod"; } }, 4100);
+    return;
+  }
+  armedAt = 0;
+  b.disabled = true;
+  b.textContent = "Deleting…";
+  try {
+    const r = await post("api/down", {});
+    $("#pod-what").textContent = "Pod " + (r.pod_id || "") + " deleted" +
+      (typeof r.session_cost_estimate === "number" ? " · ≈ " + money(r.session_cost_estimate) + " this session" : "");
+  } catch (e) {
+    $("#pod-meta").textContent = "Could not delete it: " + e.message + " (kami down in a terminal)";
+  }
+  b.disabled = false;
+  b.classList.remove("armed");
+  b.textContent = "Delete pod";
+  refresh();
+});
+
+$$(".tab").forEach(t => t.addEventListener("click", () => {
+  if (t.disabled) return;
+  tab = t.dataset.tab;
+  renderForms();
+}));
+
+/* --- images for "Image -> mesh" --- */
+const drop = $("#drop"), picker = $("#files");
+function addFiles(list) {
+  for (const file of list) {
+    if (!/\.(png|jpe?g|webp)$/i.test(file.name) && !/^image\/(png|jpeg|webp)$/.test(file.type)) continue;
+    if (images.length >= 20) break;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const name = /\.(png|jpe?g|webp)$/i.test(file.name) ? file.name
+                 : "pasted." + (file.type.split("/")[1] || "png").replace("jpeg", "jpg");
+      images.push({name, data: String(reader.result).split(",")[1], url: URL.createObjectURL(file)});
+      renderThumbs();
+    };
+    reader.readAsDataURL(file);
+  }
+}
+function renderThumbs() {
+  const box = $("#thumbs");
+  box.innerHTML = "";
+  images.forEach((img, i) => {
+    const el = document.createElement("div");
+    el.className = "thumb";
+    el.title = img.name;
+    const pic = document.createElement("img");
+    pic.src = img.url; pic.alt = img.name;
+    const x = document.createElement("button");
+    x.type = "button"; x.textContent = "×"; x.setAttribute("aria-label", "Remove " + img.name);
+    x.addEventListener("click", () => { URL.revokeObjectURL(img.url); images.splice(i, 1); renderThumbs(); });
+    el.append(pic, x);
+    box.append(el);
+  });
+  const button = $('[data-form="mesh"] .primary');
+  button.textContent = images.length > 1 ? "Make " + images.length + " meshes" : "Make mesh";
+}
+drop.addEventListener("click", () => picker.click());
+drop.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); picker.click(); } });
+picker.addEventListener("change", () => { addFiles(picker.files); picker.value = ""; });
+drop.addEventListener("dragover", e => { e.preventDefault(); drop.classList.add("over"); });
+drop.addEventListener("dragleave", () => drop.classList.remove("over"));
+drop.addEventListener("drop", e => { e.preventDefault(); drop.classList.remove("over"); addFiles(e.dataTransfer.files); });
+document.addEventListener("paste", e => {
+  if (tab !== "mesh" || !ready()) return;
+  const files = [...(e.clipboardData || {}).items || []].filter(i => i.kind === "file").map(i => i.getAsFile());
+  if (files.length) addFiles(files);
+});
+
+/* --- sending --- */
+function num(form, name) {
+  const el = form.elements[name];
+  if (!el || el.value === "") return undefined;
+  return Number(el.value);
+}
+function meshParams(form) {
+  return {seed: num(form, "seed"), texture_size: num(form, "texture_size"),
+          decimation_target: num(form, "decimation_target"), remesh: form.elements.remesh.checked};
+}
+function imageParams(form) {
+  return {seed: num(form, "seed"), steps: num(form, "steps"), guidance: num(form, "guidance"),
+          width: num(form, "width"), height: num(form, "height")};
+}
+
+$$(".form").forEach(form => form.addEventListener("submit", async e => {
+  e.preventDefault();
+  const kind = form.dataset.form, notice = $("[data-notice]", form), button = $(".primary", form);
+  let body;
+  if (kind === "mesh") {
+    if (!images.length) { notice.className = "notice bad"; notice.textContent = "Add an image first"; return; }
+    body = {kind, images: images.map(i => ({name: i.name, data: i.data})), params: meshParams(form)};
+  } else if (kind === "image") {
+    body = {kind, prompt: form.elements.prompt.value, count: num(form, "count") || 1, params: imageParams(form)};
+  } else {
+    const seed = num(form, "seed");
+    body = {kind, prompt: form.elements.prompt.value,
+            params: {image: {seed}, mesh: {...meshParams(form), seed}}};
+  }
+  button.disabled = true;
+  notice.className = "notice";
+  notice.textContent = "Sending…";
+  try {
+    const r = await post("api/jobs", body);
+    notice.textContent = r.jobs.length > 1 ? r.jobs.length + " jobs sent" : "Sent";
+    if (kind === "mesh") { images.forEach(i => URL.revokeObjectURL(i.url)); images.length = 0; renderThumbs(); }
+    refresh();
+  } catch (err) {
+    notice.className = "notice bad";
+    notice.textContent = err.message;
+  } finally {
+    button.disabled = false;
+  }
+}));
+
+/* --- jobs --- */
+const STATE_TEXT = {sending: "sending", queued: "queued", running: "on the GPU",
+                    downloading: "downloading", done: "done", error: "failed"};
+function renderJobs(list) {
+  $("#jobs-section").hidden = !list.length;
+  const ul = $("#jobs");
+  ul.innerHTML = "";
+  for (const j of list) {
+    const li = document.createElement("li");
+    li.className = "job";
+    const mark = document.createElement("span");
+    if (j.status === "done") { mark.className = "dot ready"; }
+    else if (j.status === "error") { mark.className = "dot bad"; }
+    else { mark.className = "spin"; }
+    const label = document.createElement("span");
+    label.className = "label"; label.textContent = j.label; label.title = j.label;
+    const state = document.createElement("span");
+    state.className = "state";
+    let text = STATE_TEXT[j.status] || j.status;
+    if (j.status === "queued" && j.position) text += " #" + j.position;
+    const end = j.finished || Date.now() / 1000;
+    state.textContent = text + " · " + Math.max(0, Math.round(end - j.created)) + " s";
+    li.append(mark, label, state);
+    if (j.error || (j.files && j.files.length)) {
+      const detail = document.createElement("span");
+      detail.className = "detail" + (j.error ? " bad" : "");
+      if (j.error) detail.textContent = j.error;
+      else j.files.forEach((f, i) => {
+        if (i) detail.append(", ");
+        const a = document.createElement("a");
+        a.href = "files/" + encodeURIComponent(f); a.target = "_blank"; a.textContent = f;
+        detail.append(a);
+      });
+      li.append(detail);
+    }
+    ul.append(li);
+  }
+}
+
+/* --- gallery --- */
+document.addEventListener("click", e => {
+  const b = e.target.closest(".grow");
+  if (!b) return;
+  const card = b.closest(".card"), full = !card.classList.contains("full");
+  $$(".card.full").forEach(c => c.classList.remove("full"));
+  card.classList.toggle("full", full);
+  document.body.classList.toggle("has-full", full);
+});
+document.addEventListener("keydown", e => {
+  if (e.key === "Escape") {
+    $$(".card.full").forEach(c => c.classList.remove("full"));
+    document.body.classList.remove("has-full");
+  }
+});
+async function refreshGallery() {
+  if (document.body.classList.contains("has-full")) return false;   // not under the user's eyes
+  const r = await fetch("api/gallery", {cache: "no-store"});
+  if (!r.ok) return false;
+  $("#gallery").innerHTML = await r.text();
+  return true;
+}
+
+/* --- polling --- */
+let busy = false;
+async function refresh() {
+  if (busy) return;
+  busy = true;
+  try {
+    const r = await fetch("api/state", {cache: "no-store"});
+    if (r.ok) {
+      const s = await r.json();
+      pod = s.pod;
+      renderPod();
+      renderForms();
+      renderJobs(s.jobs || []);
+      if (s.signature !== signature && await refreshGallery()) signature = s.signature;
+    }
+  } catch (e) {
+    $("#pod-what").textContent = "kami ui stopped (run it again in a terminal)";
+    $("#pod-dot").className = "dot bad";
+  } finally {
+    busy = false;
+  }
+}
+refresh();
+setInterval(refresh, 3000);
+</script>
+</body>
+</html>

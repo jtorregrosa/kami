@@ -22,7 +22,7 @@ Your PC ── kami mesh photo.png ──HTTPS──► https://<pod>-8000.proxy
 ## Layout
 
 - `kami/cli.py` — argparse CLI and the commands (`init`, `doctor`, `gpus`, `prices`,
-  `profiles`, `volume`, `up`, `down`, `status`, `cost`, `logs`, `watchdog`, `mesh`, `image`).
+  `profiles`, `volume`, `up`, `down`, `status`, `cost`, `logs`, `watchdog`, `mesh`, `image`, `ui`).
 - `kami/server.py` — runs *inside the pod* (its source is sent in `KAMI_SERVER_SRC` and
   run with `python3 -c`): loads the pipelines, serves `/health`, `/metrics`, `/v1/info`
   and the jobs API (`POST /v1/jobs`, `GET /v1/jobs/<id>`, `GET /v1/jobs/<id>/files/<name>`).
@@ -42,6 +42,11 @@ Your PC ── kami mesh photo.png ──HTTPS──► https://<pod>-8000.proxy
   `extends`; `mesh_model` / `image_model`), `.env`, local state in `.kami/`.
 - `kami/api.py`, `kami/runpod.py`, `kami/vast.py`, `kami/catalog.py` — provider clients and
   GPU name tables (unchanged from ronin).
+- `kami/webui.py` + `kami/webui.html` — `kami ui`: a page on 127.0.0.1 to send jobs to the
+  active pod (kami relays them; the pod key stays in kami), follow them, browse
+  `output_dir` (GLBs in `<model-viewer>` from a CDN) and delete the pod. It never starts a
+  pod. Host header checked; POSTs need the page's token, JSON and same Origin.
+  `cli.WebBackend` gives it the pod status, target and `down`.
 - `kami/watchdog.py`, `kami/ui.py`, `kami/mascot.py` — local guard, console output, mascot.
 - `docker/Dockerfile` — the kami-server image (torch 2.6 / CUDA 12.4 + TRELLIS.2 + diffusers);
   `.github/workflows/server-image.yml` builds and pushes it to ghcr.io.

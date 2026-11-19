@@ -87,6 +87,11 @@ def submit(url: str, api_key: str, body: dict) -> dict:
     return _json(*_request(url + "/v1/jobs", api_key, body), "Sending the job")
 
 
+def check(url: str, api_key: str, job_id: str) -> dict:
+    """The job's current state on the pod (status, position, files, error)."""
+    return _json(*_request(f"{url}/v1/jobs/{job_id}", api_key), "Checking the job")
+
+
 STATUS_TEXT = {"queued": "Queued on the pod", "running": "Generating on the GPU"}
 
 

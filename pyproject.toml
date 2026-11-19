@@ -14,3 +14,6 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 include = ["kami*"]
+
+[tool.setuptools.package-data]
+kami = ["webui.html"]

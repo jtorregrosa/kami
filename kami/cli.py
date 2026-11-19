@@ -18,7 +18,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import __version__, catalog, config, fit, jobs, mascot, ui
+from . import __version__, catalog, config, fit, jobs, mascot, ui, webui
 from .api import ProviderError
 from .config import Config, ConfigError, load_config, load_env, load_state, save_state
 from .pod import (CONTAINER_DISK_PRICE_GB_MONTH, CONTAINER_START, DEAD_STATES, FATAL_MARKERS,
@@ -1583,7 +1583,7 @@ def cmd_mesh(args, cfg: Config) -> None:
         body = {"kind": "mesh", "image": image, "name": jobs.safe_name(path.stem),
                 "params": mesh_params(args)}
         run_job(cfg, state, body, label, out)
-    ui.hint("Open the .glb in Blender, Windows 3D Viewer or https://gltf-viewer.donmccurdy.com")
+    ui.hint("`kami ui` shows the results in your browser; or open the .glb in Blender")
 
 
 def cmd_image(args, cfg: Config) -> None:
@@ -1602,6 +1602,82 @@ def cmd_image(args, cfg: Config) -> None:
         label = f"Image {i + 1}/{args.count}" if args.count > 1 else "Image"
         run_job(cfg, state, {"kind": "image", "prompt": args.prompt,
                              "name": jobs.safe_name(args.prompt), "params": params}, label, out)
+    ui.hint("`kami ui` shows the results in your browser")
+
+
+class WebBackend:
+    """What `kami ui`'s page needs from kami: the pod's state, where to send jobs, and
+    deleting the pod. The pod's API key stays here; the page never sees it."""
+
+    def __init__(self, cfg: Config):
+        self.cfg = cfg
+        self.served: dict[str, dict] = {}       # pod id -> what it serves (/v1/info)
+
+    def status(self) -> dict:
+        state = load_state()
+        info = status_info(self.cfg, state)
+        pod = info["pod"]
+        served = None
+        if pod and info["ready"]:
+            if pod["id"] not in self.served:
+                try:
+                    self.served[pod["id"]] = jobs.info(pod["url"], state["api_key"])
+                except ConfigError:
+                    pass
+            served = self.served.get(pod["id"])
+        if pod:
+            pod = {k: v for k, v in pod.items() if k != "url"}
+        return {"pod": pod, "ready": info["ready"], "waiting": info["waiting"],
+                "served": served and {k: served.get(k) for k in
+                                      ("mesh_model", "image_model", "mesh_defaults", "image_defaults")}}
+
+    def target(self) -> tuple[str, str]:
+        state = load_state()
+        if not state.get("pod_id"):
+            raise ConfigError("No pod is active: run `kami up` in a terminal")
+        return pod_url_of(self.cfg, state), state["api_key"]
+
+    def down(self) -> dict:
+        state = load_state()
+        if not state.get("pod_id"):
+            raise ConfigError("No pod is registered")
+        estimate = estimated_cost(state)
+        pod_id = terminate(client(pod_provider(state)), state)
+        return {"pod_id": pod_id,
+                "session_cost_estimate": round(estimate, 2) if estimate is not None else None}
+
+
+def cmd_ui(args, cfg: Config) -> None:
+    """A local web page: make meshes and images on the active pod, browse the results."""
+    folder = Path(args.folder) if args.folder else Path(cfg.output_dir)
+    if not folder.is_dir():
+        if args.folder:
+            raise ConfigError(f"Not a folder: {folder}")
+        folder.mkdir(parents=True, exist_ok=True)        # empty gallery; fills as results come
+    found = webui.cards(folder)
+    meshes = sum(c["kind"] == "mesh" for c in found)
+
+    def ready(url):
+        ui.ok(f"kami ui · {folder} · {meshes} mesh(es), {len(found) - meshes} image(s)")
+        ui.step(f"{ui.bold(url)} {ui.dim('(only this PC can open it)')}")
+        ui.hint("It sends jobs to the pod `kami up` started; it never starts one itself.")
+        ui.hint("Ctrl+C stops the page (the pod, if any, keeps running: `kami down`).")
+        sys.stdout.flush()                   # the URL must show now, even when piped
+
+    try:
+        work = webui.serve(folder, WebBackend(cfg), port=args.port,
+                           open_browser=not args.no_browser, on_ready=ready)
+    except OSError as e:
+        raise ConfigError(f"Cannot serve on port {args.port}: {e}\n"
+                          "Pick another with --port, or leave it out for a free one.") from None
+    print()
+    left = work.active() if work else 0
+    if left:
+        ui.warn(f"{left} job(s) from the page were still in progress: they finish on the pod, "
+                "but their files were not downloaded")
+    ui.ok("kami ui stopped")
+    if _pod_registered():
+        ui.hint("The pod is still up and billing: `kami status` · `kami down`")
 
 
 # Commands whose output is not framed with blank lines (none at the moment).
@@ -1794,6 +1870,13 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--negative", help="negative prompt (models with guidance only)")
     add_pod_options(p)
     p.set_defaults(func=cmd_image)
+
+    p = sub.add_parser("ui", help="web page on this PC: make meshes and images, browse the results",
+                       epilog="e.g. `kami ui`, `kami ui meshes --port 8765`")
+    p.add_argument("folder", nargs="?", help="folder to show (default: output_dir in kami.toml)")
+    p.add_argument("--port", type=int, default=0, help="local port (default: a free one)")
+    p.add_argument("--no-browser", action="store_true", help="print the URL, do not open a browser")
+    p.set_defaults(func=cmd_ui)
 
     argv = sys.argv[1:] if argv is None else list(argv)
     args = parser.parse_args(argv)

@@ -16,7 +16,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from kami import api, catalog, cli, config, fit, guard, jobs, pod, runpod, vast, watchdog
+from kami import api, catalog, cli, config, fit, guard, jobs, pod, runpod, vast, watchdog, webui
 
 pod_mod = pod   # `pod` is also a common local name in tests
 
@@ -1637,3 +1637,254 @@ class VastBilling(unittest.TestCase):
         self.assertEqual(rows[0]["timeBilledMs"], 3_600_000)
         self.assertEqual(req.call_args_list[1].kwargs["query"]["after_token"], "t")
         self.assertAlmostEqual(cli.billed_by_pod(rows)["42"]["amount"], 0.5)
+
+
+class WebUI(unittest.TestCase):
+    """`kami ui`: the gallery, the local server, its guards, and the jobs it relays."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.folder = Path(tmp.name)
+        for name, mtime in (("owl.glb", 100), ("owl.png", 100), ("cat.png", 200),
+                            ("notes.txt", 300), ("chair.glb", 50)):
+            path = self.folder / name
+            path.write_bytes(b"x" * 10)
+            os.utime(path, (mtime, mtime))
+        (self.folder / "sub").mkdir()
+        (self.folder / "sub" / "hidden.png").write_bytes(b"x")
+        self.backend = mock.Mock()
+        self.backend.status.return_value = {
+            "pod": {"id": "p1", "status": "RUNNING", "profile": "mesh"}, "ready": True,
+            "waiting": None, "served": {"mesh_model": "m", "image_model": "i"}}
+        self.backend.target.return_value = ("https://pod", "pod-secret-key")
+        self.backend.down.return_value = {"pod_id": "p1", "session_cost_estimate": 0.42}
+
+    # --- gallery ---
+
+    def test_a_mesh_and_its_image_share_a_card(self):
+        cards = webui.cards(self.folder)
+        self.assertEqual([c["name"] for c in cards], ["cat.png", "owl.glb", "chair.glb"])
+        self.assertEqual((cards[1]["kind"], cards[1]["source"]), ("mesh", "owl.png"))
+        self.assertIsNone(cards[2]["source"])
+
+    def test_page_escapes_names_and_fills_once(self):
+        (self.folder / "a&b'c.png").write_bytes(b"x")
+        (self.folder / "{{TOKEN}}.png").write_bytes(b"x")
+        page = webui.page(self.folder, "tok123")
+        self.assertIn('src="files/owl.glb"', page)
+        self.assertIn('poster="files/owl.png"', page)
+        self.assertIn("a&amp;b&#x27;c.png", page)
+        self.assertIn('src="files/a%26b%27c.png"', page)
+        self.assertNotIn("a&b'c.png", page)
+        self.assertIn('content="tok123"', page)
+        self.assertIn("{{TOKEN}}.png", page)                  # a name, not filled in
+        self.assertNotIn("notes.txt", page)
+        self.assertIn(webui.MODEL_VIEWER, page)
+
+    def test_signature_changes_with_a_new_result(self):
+        before = webui.signature(self.folder)
+        (self.folder / "new.glb").write_bytes(b"y")
+        self.assertNotEqual(webui.signature(self.folder), before)
+
+    def test_empty_folder(self):
+        with tempfile.TemporaryDirectory() as empty:
+            self.assertIn("No results yet", webui.gallery(Path(empty)))
+        self.assertEqual(webui.results(self.folder / "missing"), [])
+
+    # --- requests from the page ---
+
+    def test_build_bodies(self):
+        png = base64.b64encode(b"png").decode()
+        bodies = webui.build_bodies({"kind": "mesh", "images": [
+            {"name": "My Owl.png", "data": png}, {"name": "b.jpg", "data": png}],
+            "params": {"seed": 3, "remesh": False, "texture_size": None}})
+        self.assertEqual([b["name"] for _, b in bodies], ["my-owl", "b"])
+        self.assertEqual(bodies[0][1]["params"], {"seed": 3, "remesh": False})
+        images = webui.build_bodies({"kind": "image", "prompt": " owl ", "count": 3,
+                                     "params": {"seed": 10, "guidance": 1}})
+        self.assertEqual([b["params"]["seed"] for _, b in images], [10, 11, 12])
+        self.assertEqual(images[0][1]["prompt"], "owl")
+        self.assertIsInstance(images[0][1]["params"]["guidance"], float)
+        t2m, = webui.build_bodies({"kind": "text-to-mesh", "prompt": "owl",
+                                   "params": {"image": {"seed": 1}, "mesh": {"seed": 1}}})
+        self.assertEqual(t2m[1]["params"], {"image": {"seed": 1}, "mesh": {"seed": 1}})
+
+    def test_build_bodies_refuses_bad_requests(self):
+        png = base64.b64encode(b"png").decode()
+        for request, error in (
+                ({"kind": "video"}, "kind must be"),
+                ({"kind": "mesh", "images": []}, "at least one image"),
+                ({"kind": "mesh", "images": [{"name": "a.gif", "data": png}]}, "not an image"),
+                ({"kind": "mesh", "images": [{"name": "a.png", "data": "%%"}]}, "base64"),
+                ({"kind": "mesh", "images": [{"name": "a.png", "data": png}] * 21}, "At most"),
+                ({"kind": "mesh", "images": [{"name": "a.png", "data": png}],
+                  "params": {"steps": 4}}, "unknown parameter"),
+                ({"kind": "mesh", "images": [{"name": "a.png", "data": png}],
+                  "params": {"seed": 1.5}}, "whole number"),
+                ({"kind": "image", "prompt": "  "}, "prompt"),
+                ({"kind": "image", "prompt": "x", "count": 9}, "count"),
+                ({"kind": "image", "prompt": "x", "params": {"negative": 3}}, "text"),
+                ([], "JSON object")):
+            with self.assertRaisesRegex(ValueError, error):
+                webui.build_bodies(request)
+
+    def _job(self, work, job_id):
+        work.jobs[job_id] = {"id": job_id, "label": "x", "kind": "mesh", "status": "sending",
+                             "position": None, "error": None, "files": [], "created": 0,
+                             "finished": None}
+        return work.jobs[job_id]
+
+    def test_a_job_is_relayed_and_downloaded(self):
+        work = webui.Work(self.backend, self.folder, sleep=lambda s: None)
+        job = self._job(work, "w1")
+        with mock.patch.object(jobs, "submit", return_value={"id": "r1", "status": "queued", "position": 1}), \
+                mock.patch.object(jobs, "check", side_effect=[{"id": "r1", "status": "running"},
+                                                              {"id": "r1", "status": "done", "files": ["owl.glb"]}]), \
+                mock.patch.object(jobs, "download", return_value=[self.folder / "owl-2.glb"]) as download:
+            work._run("w1", {"kind": "mesh"})
+        self.assertEqual((job["status"], job["files"]), ("done", ["owl-2.glb"]))
+        self.assertEqual(download.call_args.args[:2], ("https://pod", "pod-secret-key"))
+
+    def test_a_failed_job_says_why(self):
+        work = webui.Work(self.backend, self.folder, sleep=lambda s: None)
+        job = self._job(work, "w1")
+        with mock.patch.object(jobs, "submit", return_value={"id": "r1", "status": "error",
+                                                             "error": "CUDA out of memory"}):
+            work._run("w1", {"kind": "mesh"})
+        self.assertEqual((job["status"], job["error"]), ("error", "CUDA out of memory"))
+        self.backend.target.side_effect = ConfigError("No pod is active\nmore")
+        job = self._job(work, "w2")
+        work._run("w2", {"kind": "mesh"})
+        self.assertEqual(job["error"], "No pod is active")
+
+    def test_too_many_jobs_at_once(self):
+        work = webui.Work(self.backend, self.folder)
+        for i in range(webui.MAX_ACTIVE):
+            work.jobs[f"w{i}"] = {"status": "running"}
+        with self.assertRaisesRegex(ValueError, "Too many"):
+            work.create({"kind": "image", "prompt": "x"})
+
+    def test_pod_status_is_cached_and_never_raises(self):
+        status = webui.PodStatus(self.backend, ttl=60)
+        status.get()
+        status.get()
+        self.assertEqual(self.backend.status.call_count, 1)
+        status.get(fresh=True)
+        self.assertEqual(self.backend.status.call_count, 2)
+        self.backend.status.side_effect = RuntimeError("provider down")
+        self.assertEqual(status.get(fresh=True)["error"], "provider down")
+
+    # --- the server ---
+
+    def start(self):
+        import threading
+        from http.server import ThreadingHTTPServer
+        self.port = [0]
+        self.work = webui.Work(self.backend, self.folder, sleep=lambda s: None)
+        status = webui.PodStatus(self.backend, ttl=0)
+        server = ThreadingHTTPServer(("127.0.0.1", 0), webui.make_handler(
+            self.folder, self.port, "tok", self.work, status, self.backend))
+        self.port[0] = server.server_address[1]
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+
+    def call(self, method, path, body=None, headers=None):
+        import http.client
+        conn = http.client.HTTPConnection("127.0.0.1", self.port[0], timeout=5)
+        sent = {"Host": f"127.0.0.1:{self.port[0]}"}
+        sent.update(headers or {})
+        data = json.dumps(body).encode() if body is not None else None
+        conn.request(method, path, body=data, headers=sent)
+        r = conn.getresponse()
+        out = (r.status, r.getheader("Content-Type"), r.read())
+        conn.close()
+        return out
+
+    def act(self, path, body, **extra):
+        headers = {"Content-Type": "application/json", "X-Kami-Token": "tok",
+                   "Origin": f"http://127.0.0.1:{self.port[0]}"}
+        headers.update(extra)
+        return self.call("POST", path, body, {k: v for k, v in headers.items() if v is not None})
+
+    def test_server_serves_results_only(self):
+        self.start()
+        status, kind, body = self.call("GET", "/")
+        self.assertEqual((status, kind), (200, "text/html; charset=utf-8"))
+        self.assertIn(b"owl.glb", body)
+        self.assertEqual(self.call("GET", "/files/owl.glb")[:2], (200, "model/gltf-binary"))
+        self.assertEqual(self.call("GET", "/api/gallery")[0], 200)
+        for path in ("/files/notes.txt", "/files/sub/hidden.png", "/files/..%2Fowl.png",
+                     "/files/sub%5Chidden.png", "/files/", "/elsewhere"):
+            self.assertEqual(self.call("GET", path)[0], 404, path)
+        self.assertEqual(self.call("GET", "/", headers={"Host": "evil.example:80"})[0], 403)
+        self.assertEqual(self.call("GET", "/", headers={"Host": f"localhost:{self.port[0]}"})[0], 200)
+
+    def test_state_never_shows_the_pod_key(self):
+        self.start()
+        status, _, body = self.call("GET", "/api/state")
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body)["pod"]["pod"]["id"], "p1")
+        self.assertNotIn(b"pod-secret-key", body)
+
+    def test_only_the_page_can_act(self):
+        self.start()
+        request = {"kind": "image", "prompt": "owl"}
+        for extra in ({"X-Kami-Token": None},                    # no token
+                      {"X-Kami-Token": "wrong"},
+                      {"Origin": "https://evil.example"},        # another site
+                      {"Content-Type": "text/plain"}):           # a plain form post
+            self.assertEqual(self.act("/api/jobs", request, **extra)[0], 403, extra)
+        rebinding = {"Host": "evil.example:80", "X-Kami-Token": "tok",
+                     "Content-Type": "application/json"}
+        self.assertEqual(self.call("POST", "/api/down", {}, rebinding)[0], 403)
+        self.backend.down.assert_not_called()
+
+    def test_jobs_from_the_page(self):
+        self.start()
+        with mock.patch.object(webui.Work, "_run"):
+            status, _, body = self.act("/api/jobs", {"kind": "image", "prompt": "owl", "count": 2})
+        self.assertEqual(status, 202)
+        self.assertEqual(len(json.loads(body)["jobs"]), 2)
+        self.assertEqual(self.act("/api/jobs", {"kind": "image", "prompt": ""})[0], 400)
+
+    def test_no_jobs_without_a_ready_pod(self):
+        self.backend.status.return_value = {"pod": None, "ready": False}
+        self.start()
+        status, _, body = self.act("/api/jobs", {"kind": "image", "prompt": "owl"})
+        self.assertEqual(status, 409)
+        self.assertIn("kami up", json.loads(body)["error"])
+
+    def test_delete_the_pod(self):
+        self.start()
+        status, _, body = self.act("/api/down", {})
+        self.assertEqual((status, json.loads(body)["pod_id"]), (200, "p1"))
+        self.backend.down.side_effect = ConfigError("No pod is registered")
+        self.assertEqual(self.act("/api/down", {})[0], 409)
+
+    def test_cli_wires_the_command(self):
+        with mock.patch.object(webui, "serve", return_value=None) as serve, \
+                mock.patch.object(cli, "load_config", return_value=mock.Mock(output_dir=str(self.folder))), \
+                mock.patch.object(cli, "_pod_registered", return_value=False):
+            cli.main(["ui", "--no-browser", "--port", "8765"])
+        folder, backend = serve.call_args.args
+        self.assertEqual(folder, self.folder)
+        self.assertIsInstance(backend, cli.WebBackend)
+        self.assertEqual(serve.call_args.kwargs["port"], 8765)
+        self.assertFalse(serve.call_args.kwargs["open_browser"])
+
+    def test_backend_hides_the_pod_url_and_key(self):
+        info = {"pod": {"id": "p1", "url": "https://p1-8000.proxy", "status": "RUNNING"},
+                "ready": True, "waiting": None}
+        with mock.patch.object(cli, "load_state", return_value={"pod_id": "p1", "api_key": "k"}), \
+                mock.patch.object(cli, "status_info", return_value=info), \
+                mock.patch.object(jobs, "info", return_value={"mesh_model": "m", "image_model": None,
+                                                              "secret": "x"}) as served:
+            backend = cli.WebBackend(mock.Mock())
+            first = backend.status()
+            backend.status()
+        self.assertNotIn("url", first["pod"])
+        self.assertEqual(first["served"]["mesh_model"], "m")
+        self.assertNotIn("secret", first["served"])
+        served.assert_called_once()                       # cached per pod
