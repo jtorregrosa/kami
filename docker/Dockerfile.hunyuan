@@ -26,10 +26,10 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*
 
 # What hy3dgen imports that the TRELLIS.2 image lacks, without moving what TRELLIS.2 and
-# diffusers were installed with (torch, numpy, transformers, diffusers stay as they are).
+# diffusers were installed with (torch, numpy, transformers, diffusers, Pillow stay as they are).
 # hy3dgen itself goes on PYTHONPATH, not through pip: its install_requires would pull
 # gradio, rembg and onnxruntime, which kami does not use.
-RUN pip freeze | grep -iE '^(torch|torchvision|numpy|transformers|diffusers|accelerate|huggingface[-_]hub|safetensors)==' > /tmp/keep.txt \
+RUN pip freeze | grep -iE '^(torch|torchvision|numpy|transformers|diffusers|accelerate|huggingface[-_]hub|safetensors|pillow)==' > /tmp/keep.txt \
  && pip install -c /tmp/keep.txt scikit-image scipy pymeshlab pygltflib xatlas pybind11 einops pyyaml trimesh \
  && rm -f /tmp/keep.txt
 

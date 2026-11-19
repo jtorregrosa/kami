@@ -22,7 +22,9 @@ REQUEST_TIMEOUT = 60
 RETRIES = 3                     # transient network errors per request
 
 # Image formats TRELLIS.2 (PIL) reads; anything else is refused before a job is sent.
-IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg", ".webp", ".bmp")
+# what kami-server reads (server.open_image)
+IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg", ".webp", ".avif", ".heic", ".heif", ".tif", ".tiff",
+                  ".bmp", ".gif")
 MAX_IMAGE_BYTES = 48 * 1024 * 1024
 
 

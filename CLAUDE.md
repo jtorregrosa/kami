@@ -82,8 +82,10 @@ Your PC ── kami mesh photo.png ──HTTPS──► https://<pod>-8000.proxy
 
 The client side is unit-tested with mocks. Verified on a real 4090 pod: the Docker image,
 TRELLIS.2 with `dino_model` (transformers 5 layout aliased by `fit_transformers`), and an
-image -> GLB job end to end (PNG textures). Not run on a real GPU yet: `offload` moving the
-pipelines between CPU and GPU, Z-Image-Turbo, text-to-mesh, `kami reload`, the job
+image -> GLB job end to end (PNG textures), `kami reload` (on an L40S). Images go through
+`server.open_image` (Pillow; pillow-heif for HEIC; OpenCV if Pillow fails; EXIF turned;
+almost opaque alpha dropped so the background is removed). Not run on a real GPU yet: `offload` moving the
+pipelines between CPU and GPU, Z-Image-Turbo, text-to-mesh, the job
 progress hooks, TRELLIS.2 multiview, a whole Hunyuan3D-2 job (the -hunyuan image builds
 and its pipelines load on a 4090, with `dinov2_v4_checkpoints` and
 `trust_hunyuan_pipelines`; the first jobs failed in pymeshlab, whose plugins needed

@@ -658,8 +658,77 @@ LOCK = threading.Lock()
 COUNTS = {"finished": 0, "failed": 0, "running": 0}
 
 
-def run(job):
+def open_image(data):
+    """The uploaded image as an RGB / RGBA PIL image, whatever it came as: PNG, JPEG, WebP,
+    AVIF, HEIC (pillow-heif), TIFF, BMP, GIF (its first frame). A photo is turned as its
+    EXIF says; palettes, grayscale and 16-bit images are converted. If Pillow cannot
+    read it, OpenCV decodes it instead (older images mixed pillow and pillow-simd, and
+    that Pillow failed on WebP: "too many values to unpack")."""
+    from PIL import Image, ImageOps
+    try:
+        from pillow_heif import register_heif_opener
+        register_heif_opener()
+    except ImportError:
+        pass
+    try:
+        image = Image.open(io.BytesIO(data))
+        image.load()
+    except Exception as e:
+        image = opencv_image(data, e)
+    try:
+        image = ImageOps.exif_transpose(image)
+    except Exception:
+        pass                              # a broken EXIF block: keep it as it is
+    return plain_mode(image)
+
+
+# An alpha channel counts as a cut-out when at least this share of the image is
+# (nearly) transparent. TRELLIS.2 skips background removal for any image with alpha,
+# so an almost opaque one (a WebP whose alpha only fades a few edge pixels) made a mesh
+# of the whole square, background included.
+CUTOUT_SHARE = 0.01
+CUTOUT_ALPHA = 26                         # alpha below ~10 %: transparent
+
+
+def plain_mode(image):
+    """RGB, or RGBA when the image is really cut out (see CUTOUT_SHARE)."""
+    if image.mode in ("I;16", "I;16B", "I;16L", "I"):
+        image = image.point(lambda v: v / 257).convert("L")
+    elif image.mode == "F":
+        image = image.convert("L")
+    if image.mode != "RGBA":
+        transparent = "A" in image.getbands() or "transparency" in image.info
+        if not transparent:
+            return image if image.mode == "RGB" else image.convert("RGB")
+        image = image.convert("RGBA")
+    alpha = image.getchannel("A")
+    clear = sum(alpha.histogram()[:CUTOUT_ALPHA])
+    if clear < CUTOUT_SHARE * image.width * image.height:
+        return image.convert("RGB")       # not a cut-out: background removal runs
+    return image
+
+
+def opencv_image(data, error):
+    """Decode with OpenCV what Pillow could not (`error`, raised again if OpenCV cannot)."""
     from PIL import Image
+    try:
+        import cv2
+        import numpy as np
+    except ImportError:
+        raise error from None
+    pixels = cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_UNCHANGED)
+    if pixels is None:
+        raise ValueError(f"cannot read the image ({type(error).__name__}: {error})") from None
+    if pixels.dtype != np.uint8:          # 16-bit PNG / TIFF
+        pixels = (pixels / 257).astype(np.uint8)
+    log(f"Pillow could not read an image ({type(error).__name__}): decoded with OpenCV")
+    if pixels.ndim == 2:
+        return Image.fromarray(pixels, "L")
+    code = cv2.COLOR_BGRA2RGBA if pixels.shape[2] == 4 else cv2.COLOR_BGR2RGB
+    return Image.fromarray(cv2.cvtColor(pixels, code))
+
+
+def run(job):
     os.makedirs(job.dir, exist_ok=True)
     if job.kind == "image":
         path = os.path.join(job.dir, f"{job.name}.png")
@@ -674,11 +743,7 @@ def run(job):
     else:
         # image_bytes: [(view, bytes)] (submit's), or the bytes of one image
         given = job.image_bytes if isinstance(job.image_bytes, list) else [(None, job.image_bytes)]
-        views = []
-        for view, data in given:
-            image = Image.open(io.BytesIO(data))
-            image.load()
-            views.append((view, image))
+        views = [(view, open_image(data)) for view, data in given]
     path = os.path.join(job.dir, f"{job.name}.glb")
     make_mesh(views, job.params.get("mesh", job.params), path)
     job.files.append(os.path.basename(path))

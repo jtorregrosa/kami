@@ -64,6 +64,8 @@ section { margin: 20px 0; }
 .thumb { position: relative; width: 84px; height: 84px; border-radius: 8px; overflow: hidden;
          background: var(--stage); border: 1px solid var(--line); }
 .thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.thumb-name { display: flex; align-items: center; justify-content: center; height: 100%;
+  padding: 4px; font-size: 11px; text-align: center; word-break: break-all; }
 .thumb button { position: absolute; top: 3px; right: 3px; width: 22px; height: 22px; border: 0;
                 border-radius: 6px; background: rgba(0,0,0,.6); color: #fff; cursor: pointer; line-height: 1; }
 .thumb select { position: absolute; left: 3px; right: 3px; bottom: 3px; font-size: 11px;
@@ -166,10 +168,10 @@ body.has-full::before { content: ""; position: fixed; inset: 0; background: rgba
 
       <form class="form" data-form="mesh" hidden>
         <div class="drop" id="drop" tabindex="0" role="button">
-          Drop images here, paste them, or click to choose (PNG, JPG, WebP).
+          Drop images here, paste them, or click to choose (PNG, JPG, WebP, AVIF, HEIC, TIFF, BMP, GIF).
           A PNG with transparency skips the background removal.
         </div>
-        <input type="file" id="files" accept=".png,.jpg,.jpeg,.webp" multiple hidden>
+        <input type="file" id="files" accept=".png,.jpg,.jpeg,.webp,.avif,.heic,.heif,.tif,.tiff,.bmp,.gif" multiple hidden>
         <div class="thumbs" id="thumbs"></div>
         <div class="opts">
           <label class="check" id="views-label"><input type="checkbox" id="as-views">
@@ -366,13 +368,17 @@ $$(".tab").forEach(t => t.addEventListener("click", () => {
 
 /* --- images for "Image -> mesh" --- */
 const drop = $("#drop"), picker = $("#files");
+// what kami-server reads (jobs.IMAGE_SUFFIXES); HEIC and TIFF go as they are even where
+// the browser cannot show their thumbnail
+const IMAGE_NAME = /\.(png|jpe?g|webp|avif|heic|heif|tiff?|bmp|gif)$/i;
+const IMAGE_TYPE = /^image\/(png|jpeg|webp|avif|heic|heif|tiff|bmp|gif)$/;
 function addFiles(list) {
   for (const file of list) {
-    if (!/\.(png|jpe?g|webp)$/i.test(file.name) && !/^image\/(png|jpeg|webp)$/.test(file.type)) continue;
+    if (!IMAGE_NAME.test(file.name) && !IMAGE_TYPE.test(file.type)) continue;
     if (images.length >= 20) break;
     const reader = new FileReader();
     reader.onload = () => {
-      const name = /\.(png|jpe?g|webp)$/i.test(file.name) ? file.name
+      const name = IMAGE_NAME.test(file.name) ? file.name
                  : "pasted." + (file.type.split("/")[1] || "png").replace("jpeg", "jpg");
       images.push({name, data: String(reader.result).split(",")[1], url: URL.createObjectURL(file), view: ""});
       renderThumbs();
@@ -389,6 +395,12 @@ function renderThumbs() {
     el.title = img.name;
     const pic = document.createElement("img");
     pic.src = img.url; pic.alt = img.name;
+    // HEIC / TIFF: sent as they are, but most browsers cannot draw them
+    pic.addEventListener("error", () => {
+      const label = document.createElement("span");
+      label.className = "thumb-name"; label.textContent = img.name;
+      pic.replaceWith(label);
+    });
     const x = document.createElement("button");
     x.type = "button"; x.textContent = "×"; x.setAttribute("aria-label", "Remove " + img.name);
     x.addEventListener("click", () => { URL.revokeObjectURL(img.url); images.splice(i, 1); renderThumbs(); });

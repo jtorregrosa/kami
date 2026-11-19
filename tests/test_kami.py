@@ -1742,7 +1742,7 @@ class WebUI(unittest.TestCase):
         for request, error in (
                 ({"kind": "video"}, "kind must be"),
                 ({"kind": "mesh", "images": []}, "at least one image"),
-                ({"kind": "mesh", "images": [{"name": "a.gif", "data": png}]}, "not an image"),
+                ({"kind": "mesh", "images": [{"name": "a.svg", "data": png}]}, "not an image"),
                 ({"kind": "mesh", "images": [{"name": "a.png", "data": "%%"}]}, "base64"),
                 ({"kind": "mesh", "images": [{"name": "a.png", "data": png}] * 21}, "At most"),
                 ({"kind": "mesh", "images": [{"name": "a.png", "data": png}],
@@ -2482,8 +2482,100 @@ class MultiView(unittest.TestCase):
                 webui.build_bodies({"kind": "mesh", **bad})
 
 
+def _has_pillow():
+    try:
+        import PIL.Image  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
+@unittest.skipUnless(_has_pillow(), "needs Pillow")
+class UploadedImages(unittest.TestCase):
+    """server.open_image: the formats people upload, as RGB / RGBA for the pipelines."""
+
+    def encode(self, image, fmt, **kwargs):
+        buf = io.BytesIO()
+        image.save(buf, fmt, **kwargs)
+        return buf.getvalue()
+
+    def open(self, data):
+        from kami import server
+        return server.open_image(data)
+
+    def test_common_formats_open_as_rgb(self):
+        from PIL import Image, features
+        photo = Image.new("RGB", (64, 48), (200, 120, 40))
+        formats = ["PNG", "JPEG", "BMP", "TIFF", "GIF"]
+        formats += [f for f, feature in (("WEBP", "webp"), ("AVIF", "avif"))
+                    if features.check(feature)]
+        for fmt in formats:
+            with self.subTest(fmt=fmt):
+                image = self.open(self.encode(photo, fmt))
+                self.assertEqual((image.mode, image.size), ("RGB", (64, 48)))
+
+    def test_a_real_cut_out_keeps_its_alpha(self):
+        from PIL import Image
+        cut = Image.new("RGBA", (40, 40), (0, 0, 0, 0))
+        cut.paste((255, 220, 0, 255), (10, 10, 30, 30))
+        self.assertEqual(self.open(self.encode(cut, "PNG")).mode, "RGBA")
+        # a palette PNG with a transparent colour too
+        self.assertEqual(self.open(self.encode(cut.convert("P"), "PNG", transparency=0)).mode,
+                         "RGBA")
+
+    def test_an_almost_opaque_alpha_is_dropped_so_the_background_is_removed(self):
+        from PIL import Image
+        # like the WebP that made a mesh of its whole square: alpha 143..255, nothing clear
+        image = Image.new("RGBA", (100, 100), (250, 230, 170, 255))
+        image.putpixel((0, 0), (250, 230, 170, 143))
+        self.assertEqual(self.open(self.encode(image, "PNG")).mode, "RGB")
+
+    def test_sixteen_bit_and_grayscale_become_rgb(self):
+        from PIL import Image
+        deep = Image.new("I;16", (8, 8), 65535)
+        image = self.open(self.encode(deep, "PNG"))
+        self.assertEqual(image.mode, "RGB")
+        self.assertEqual(image.getpixel((0, 0)), (255, 255, 255))
+        self.assertEqual(self.open(self.encode(Image.new("L", (8, 8), 9), "PNG")).mode, "RGB")
+
+    def test_a_phone_photo_is_turned_as_its_exif_says(self):
+        from PIL import Image
+        photo = Image.new("RGB", (60, 20), (10, 20, 30))
+        exif = Image.Exif()
+        exif[0x0112] = 6                                # orientation: rotate 90 CW
+        image = self.open(self.encode(photo, "JPEG", exif=exif.tobytes()))
+        self.assertEqual(image.size, (20, 60))
+
+    def test_the_client_offers_what_the_server_reads(self):
+        for suffix in (".png", ".jpg", ".webp", ".avif", ".heic", ".tiff", ".bmp", ".gif"):
+            self.assertIn(suffix, jobs.IMAGE_SUFFIXES)
+
+
 class Hunyuan(unittest.TestCase):
     """Hunyuan3D-2 profiles: licence, repos, pod env."""
+
+    def test_an_image_pillow_cannot_read_is_decoded_with_opencv(self):
+        from kami import server
+        pil_image = types.SimpleNamespace(fromarray=lambda pixels, mode=None: ("pil", pixels, mode))
+        pil = types.ModuleType("PIL")
+        pil.Image = pil_image
+
+        class Pixels:
+            dtype, ndim, shape = "uint8", 3, (4, 4, 4)
+        cv2 = types.SimpleNamespace(
+            IMREAD_UNCHANGED=-1, COLOR_BGRA2RGBA="bgra>rgba", COLOR_BGR2RGB="bgr>rgb",
+            imdecode=lambda buf, flag: Pixels(), cvtColor=lambda px, code: ("rgb", code))
+        numpy = types.SimpleNamespace(uint8="uint8", frombuffer=lambda data, dtype: data)
+        broken = ValueError("too many values to unpack (expected 5)")
+        modules = {"PIL": pil, "PIL.Image": pil_image, "cv2": cv2, "numpy": numpy}
+        with mock.patch.dict(sys.modules, modules), mock.patch.object(server, "log"):
+            image = server.opencv_image(b"RIFF....WEBP", broken)
+        self.assertEqual(image, ("pil", ("rgb", "bgra>rgba"), None))
+
+        cv2.imdecode = lambda buf, flag: None          # OpenCV cannot either: a clear error
+        with mock.patch.dict(sys.modules, modules):
+            with self.assertRaisesRegex(ValueError, "cannot read the image"):
+                server.opencv_image(b"junk", broken)
 
     def test_only_the_images_hunyuan_pipeline_code_is_trusted(self):
         from kami import server

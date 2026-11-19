@@ -113,6 +113,10 @@ kami mesh --prompt "a ceramic owl, studio light"      # text -> image -> mesh
 Results go to `output_dir` (`kami-out/` by default, or `-o DIR`). kami never overwrites a
 file: a second `photo.glb` becomes `photo-2.glb`.
 
+Images can be PNG, JPEG, WebP, AVIF, HEIC (phone photos, turned as their EXIF says),
+TIFF, BMP or GIF. The background is removed for you; a picture that is already cut out
+(a transparent background) is used as it is.
+
 ### Several views of one object
 
 By default every image is its own mesh. `--views` makes **one** mesh out of several

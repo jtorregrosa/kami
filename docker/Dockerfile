@@ -46,6 +46,18 @@ RUN printf '#!/bin/sh\nexit 0\n' > /usr/local/bin/nvidia-smi && chmod +x /usr/lo
 # Text -> image: diffusers with Z-Image support (0.36+), and what its pipelines load.
 RUN pip install "diffusers>=0.36" accelerate sentencepiece protobuf
 
+# setup.sh installs pillow-simd over the Pillow its other packages brought: both write
+# PIL/, and the mix failed on every WebP ("too many values to unpack"). One clean Pillow
+# instead (WebP, AVIF, TIFF... built in) and pillow-heif for HEIC photos.
+RUN SITE="$(python -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')" \
+ && (pip uninstall -y pillow-simd pillow || true) \
+ && rm -rf "$SITE/PIL" "$SITE"/[Pp]illow-*.dist-info "$SITE"/[Pp]illow_[Ss][Ii][Mm][Dd]-*.dist-info \
+ && pip install "pillow>=11.3,<13" "pillow-heif>=1.0"
+
+# every format kami sends (jobs.IMAGE_SUFFIXES) written and read back
+COPY check_images.py /tmp/check_images.py
+RUN python /tmp/check_images.py && rm /tmp/check_images.py
+
 ENV PYTHONPATH=/opt/TRELLIS.2 \
     OPENCV_IO_ENABLE_OPENEXR=1 \
     PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
