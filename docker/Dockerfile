@@ -43,8 +43,12 @@ RUN printf '#!/bin/sh\nexit 0\n' > /usr/local/bin/nvidia-smi && chmod +x /usr/lo
  && rm -f /usr/local/bin/nvidia-smi \
  && rm -rf /tmp/extensions /root/.cache
 
-# Text -> image: diffusers with Z-Image support (0.36+), and what its pipelines load.
-RUN pip install "diffusers>=0.36" accelerate sentencepiece protobuf
+# Text -> image: diffusers with Z-Image support (0.36+), and what its pipelines load;
+# peft for the camera LoRAs of `kami views`, bitsandbytes for 4-bit FLUX.2 [dev].
+# torch / torchvision / numpy stay as TRELLIS.2's extensions were compiled against.
+RUN pip freeze | grep -iE '^(torch|torchvision|numpy)==' > /tmp/keep.txt \
+ && pip install -c /tmp/keep.txt "diffusers>=0.36" accelerate sentencepiece protobuf peft bitsandbytes \
+ && rm -f /tmp/keep.txt
 
 # setup.sh installs pillow-simd over the Pillow its other packages brought: both write
 # PIL/, and the mix failed on every WebP ("too many values to unpack"). One clean Pillow
@@ -65,8 +69,9 @@ ENV PYTHONPATH=/opt/TRELLIS.2 \
 # Fail the build here, not on a billed pod, if something did not install. TRELLIS.2's
 # modules cannot be imported without a GPU (flex_gemm sets up Triton kernels on import,
 # and Triton needs a CUDA driver), so those are only checked to be installed.
-RUN python -c "import importlib.util as u, torch, diffusers; \
-missing = [m for m in ('trellis2', 'o_voxel', 'flex_gemm', 'nvdiffrast') if u.find_spec(m) is None]; \
+RUN python -c "import importlib.util as u, torch, diffusers, peft; \
+from diffusers import QwenImageEditPlusPipeline, Flux2Pipeline; \
+missing = [m for m in ('trellis2', 'o_voxel', 'flex_gemm', 'nvdiffrast', 'bitsandbytes') if u.find_spec(m) is None]; \
 assert not missing, f'not installed: {missing}'; \
 print('torch', torch.__version__, 'cuda', torch.version.cuda, 'diffusers', diffusers.__version__)"
 

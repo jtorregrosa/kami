@@ -452,12 +452,13 @@ def cmd_profiles(args, cfg: Config) -> None:
     for name, p in cfg.profiles.items():
         gpu = p.gpus[0] + (f" x{p.gpu_count}" if p.gpu_count > 1 else "")
         rows.append((name + (" *" if name == cfg.default_profile else ""), gpu,
-                     p.mesh_model or "-", p.image_model or "-"))
-    w = [max(len(r[i]) for r in [("profile", "GPU", "mesh", "image"), *rows]) for i in range(3)]
-    print("  " + ui.dim(f"{'profile':<{w[0]}}  {'GPU':<{w[1]}}  {'mesh':<{w[2]}}  image"))
-    for name, gpu, mesh, image in rows:
+                     p.mesh_model or "-", p.image_model or "-", p.views_model or "-"))
+    head = ("profile", "GPU", "mesh", "image", "views")
+    w = [max(len(r[i]) for r in [head, *rows]) for i in range(4)]
+    print("  " + ui.dim("  ".join(h.ljust(w[i]) if i < 4 else h for i, h in enumerate(head))))
+    for name, gpu, mesh, image, views in rows:
         # pad before colouring: ANSI codes would count towards the width
-        print(f"  {ui.bold(name.ljust(w[0]))}  {gpu:<{w[1]}}  {mesh:<{w[2]}}  {image}")
+        print(f"  {ui.bold(name.ljust(w[0]))}  {gpu:<{w[1]}}  {mesh:<{w[2]}}  {image:<{w[3]}}  {views}")
     print()
     ui.hint("* default profile · `kami up -p <profile>` to pick another")
 
@@ -1629,6 +1630,58 @@ def cmd_image(args, cfg: Config) -> None:
     ui.hint("`kami ui` shows the results in your browser")
 
 
+def views_params(args) -> dict:
+    params = {}
+    for key in ("steps", "guidance", "seed", "lora_scale", "elevation", "distance"):
+        value = getattr(args, key, None)
+        if value is not None:
+            params[key] = value
+    if getattr(args, "angles", None):
+        params["views"] = list(args.angles)
+    return params
+
+
+def mesh_command(paths: list[Path]) -> str:
+    """`kami mesh front=a.png left=b.png ...` for the views a views job saved."""
+    named = []
+    for path in paths:
+        stem = re.sub(r"-\d+$", "", path.stem)          # a-owl-front-2: kept a file there
+        view = next((v for v in sorted(jobs.VIEW_ANGLES, key=len, reverse=True)
+                     if stem.endswith(f"-{v}")), None)
+        named.append(f"{view}={path}" if view in jobs.VIEW_NAMES else None)
+    return "kami mesh " + " ".join(n for n in named if n) if any(named) else ""
+
+
+def cmd_views(args, cfg: Config) -> None:
+    """Concept (or front picture) -> pictures of the object from several sides, for a
+    mesh model that takes views (Hunyuan3D-2mv, TRELLIS.2 --views)."""
+    if bool(args.prompt) == bool(args.front):
+        raise ConfigError("Give a concept, or --front with a picture of its front (not both)\n"
+                          'e.g. `kami views "a ceramic owl"` or `kami views --front owl.png`')
+    front = jobs.read_image(Path(args.front)) if args.front else None   # before billing
+    state = ensure_pod(args, cfg)
+    _, _, served = job_target(cfg, state)
+    if not served.get("views_model"):
+        raise ConfigError(f"The active pod (profile {state.get('profile')}) serves no views model\n"
+                          "`kami down`, then `kami up -p views-qwen` (or views-flux).")
+    if not front and not served.get("views_from_prompt"):
+        raise ConfigError(f"{served['views_model']} edits pictures and this pod has no image model\n"
+                          "Give the front with --front, or use a profile that makes it from text.")
+    params = views_params(args)
+    angles = params.get("views") or (served.get("views_defaults") or {}).get("views") or []
+    body = {"kind": "views", "params": params,
+            "name": jobs.safe_name(args.prompt or Path(args.front).stem)}
+    if front:
+        body["image"] = front
+    else:
+        body["prompt"] = args.prompt
+    label = f"Views ({', '.join(['front', *[a for a in angles if a != 'front']])})"
+    saved = run_job(cfg, state, body, label, output_dir(args, cfg))
+    command = mesh_command(saved)
+    if command:
+        ui.hint(f"`{command}` on a Hunyuan3D-2mv pod (or `kami mesh --views ...` on TRELLIS.2)")
+
+
 RELOAD_TIMEOUT = 15 * 60      # the pipelines load again: a few minutes
 
 
@@ -1766,7 +1819,9 @@ class WebBackend:
         return {"pod": pod, "ready": info["ready"], "waiting": info["waiting"],
                 "served": served and {k: served.get(k) for k in
                                       ("mesh_model", "image_model", "mesh_defaults", "image_defaults",
-                                       "mesh_backend", "max_views", "view_names", "multiview_modes")}}
+                                       "mesh_backend", "max_views", "view_names", "multiview_modes",
+                                       "views_model", "views_defaults", "view_angles",
+                                       "views_from_prompt")}}
 
     def target(self) -> tuple[str, str]:
         state = load_state()
@@ -2022,6 +2077,22 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--negative", help="negative prompt (models with guidance only)")
     add_pod_options(p)
     p.set_defaults(func=cmd_image)
+
+    p = sub.add_parser("views", help="concept -> pictures of one object from several sides (for a mesh)",
+                       epilog='e.g. `kami views "a ceramic owl"`, `kami views --front owl.png`, '
+                              '`kami views "a robot" --angles left back right front-left`')
+    p.add_argument("prompt", nargs="?", help="the concept (its front picture is made first)")
+    p.add_argument("--front", metavar="IMAGE", help="start from this picture of the front instead")
+    p.add_argument("--angles", nargs="+", choices=jobs.VIEW_ANGLES, metavar="VIEW",
+                   help=f"views to make (default: left back right); any of {', '.join(jobs.VIEW_ANGLES)}")
+    p.add_argument("--seed", type=int, help="random seed (the same for every view)")
+    p.add_argument("--steps", type=int, help="denoising steps (default: the profile's)")
+    p.add_argument("--guidance", type=float, help="guidance scale (default: the profile's)")
+    p.add_argument("--lora-scale", type=float, help="weight of the camera LoRA (default 0.9)")
+    p.add_argument("--elevation", help='camera height in the LoRA\'s words (default "eye-level shot")')
+    p.add_argument("--distance", help='camera distance in the LoRA\'s words (default "medium shot")')
+    add_pod_options(p)
+    p.set_defaults(func=cmd_views)
 
     p = sub.add_parser("reload", help="send this kami's server code to the running pod and restart "
                                       "the server (no new pod, no download)")

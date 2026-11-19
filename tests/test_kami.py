@@ -130,7 +130,7 @@ offload = true
     def test_a_profile_needs_a_model(self):
         (self.root / "kami.toml").write_text(MINIMAL + '\n[profiles.x]\ngpus = ["G"]\n',
                                              encoding="utf-8")
-        with self.assertRaisesRegex(ConfigError, "needs mesh_model or image_model"):
+        with self.assertRaisesRegex(ConfigError, "needs mesh_model, image_model or views_model"):
             config.load_config()
 
     def test_bad_min_cuda_rejected(self):
@@ -2480,6 +2480,165 @@ class MultiView(unittest.TestCase):
                     {"images": [image], "params": {"multiview_mode": "best"}}):
             with self.assertRaises(ValueError):
                 webui.build_bodies({"kind": "mesh", **bad})
+
+
+class Views(unittest.TestCase):
+    """`kami views`: profiles, the pod env, the server's views jobs, the CLI and the page."""
+
+    def load(self, extra):
+        text = MINIMAL + extra
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "kami.toml"
+            path.write_text(text, encoding="utf-8")
+            return config.load_config(path)
+
+    QWEN = """
+[profiles.vq]
+image_model = "Tongyi-MAI/Z-Image-Turbo"
+views_model = "Qwen/Qwen-Image-Edit-2511"
+views_lora = "fal/Qwen-Image-Edit-2511-Multiple-Angles-LoRA/lora.safetensors"
+views_defaults = { steps = 30, lora_scale = 0.8 }
+gpus = ["H100 PCIe"]
+"""
+
+    def test_a_views_profile_downloads_its_model_and_lora_and_tells_the_pod(self):
+        cfg = self.load(self.QWEN)
+        p = cfg.profiles["vq"]
+        self.assertEqual(p.repos, ["Tongyi-MAI/Z-Image-Turbo", "Qwen/Qwen-Image-Edit-2511",
+                                   "fal/Qwen-Image-Edit-2511-Multiple-Angles-LoRA/lora.safetensors"])
+        env = pod.server_spec(cfg, p, None, "key")[0]
+        self.assertEqual(env["KAMI_VIEWS_MODEL"], "Qwen/Qwen-Image-Edit-2511")
+        self.assertTrue(env["KAMI_VIEWS_LORA"].endswith("/lora.safetensors"))
+        self.assertEqual(json.loads(env["KAMI_VIEWS_DEFAULTS"]), {"steps": 30, "lora_scale": 0.8})
+        self.assertNotIn("KAMI_VIEWS_MODEL", pod.server_spec(cfg, cfg.profiles["main"], None, "key")[0])
+
+    def test_a_views_profile_needs_no_other_model_but_a_well_formed_lora(self):
+        self.load('\n[profiles.v]\nviews_model = "diffusers/FLUX.2-dev-bnb-4bit"\ngpus = ["L40S"]\n')
+        with self.assertRaisesRegex(ConfigError, "org/name/file.safetensors"):
+            self.load('\n[profiles.v]\nviews_model = "a/b"\nviews_lora = "a/lora"\ngpus = ["L40S"]\n')
+        with self.assertRaisesRegex(ConfigError, "views_lora needs a views_model"):
+            self.load('\n[profiles.v]\nimage_model = "a/b"\nviews_lora = "a/b/c.safetensors"\ngpus = ["L40S"]\n')
+        with self.assertRaisesRegex(ConfigError, "unknown parameter 'width'"):
+            self.load('\n[profiles.v]\nviews_model = "a/b"\nviews_defaults = { width = 9 }\ngpus = ["L40S"]\n')
+
+    def test_a_lora_file_counts_alone_in_the_download(self):
+        files = (("lora.safetensors", 300), ("other.safetensors", 999), ("demo.gif", 50))
+        with mock.patch.object(fit, "repo_files", lambda repo: files):
+            self.assertEqual(fit.entry_files("org/name/lora.safetensors"), [("lora.safetensors", 300)])
+
+    def test_the_camera_lora_prompt_and_the_view_names(self):
+        from kami import server
+        p = {"elevation": "eye-level shot", "distance": "medium shot"}
+        self.assertEqual(server.view_prompt("back", p), "<sks> back view eye-level shot medium shot")
+        self.assertEqual(server.view_prompt("front-left", p),
+                         "<sks> front-left quarter view eye-level shot medium shot")
+        self.assertEqual(tuple(server.VIEW_ANGLES), jobs.VIEW_ANGLES)
+        self.assertEqual(server.lora_parts("org/name/dir/l.safetensors"), ("org/name", "dir/l.safetensors"))
+
+    def test_views_params_are_checked(self):
+        from kami import server
+        with mock.patch.multiple(server, PIPES=mock.Mock(image=None), VIEWS_FAMILY="qwen-edit",
+                                 VIEWS_MODEL="Qwen/Qwen-Image-Edit-2511"):
+            server.check_views_params({"views": ["left", "back"]}, has_front=True)
+            for params, error in (({"views": ["up"]}, "views must be"), ({"views": []}, "views must be"),
+                                  ({"views": ["left", "left"]}, "once"),
+                                  ({"elevation": 3}, "elevation must be text")):
+                with self.assertRaisesRegex(ValueError, error):
+                    server.check_views_params(params, has_front=True)
+            # Qwen-Edit cannot make the front from text without an image model
+            with self.assertRaisesRegex(ValueError, "give a front image"):
+                server.check_views_params({}, has_front=False)
+        with mock.patch.multiple(server, PIPES=mock.Mock(image=None), VIEWS_FAMILY="flux2"):
+            server.check_views_params({}, has_front=False)      # FLUX.2 makes it itself
+
+    def test_a_views_job_turns_the_camera_around_the_front(self):
+        from kami import server
+        calls = []
+
+        class Picture:
+            mode, size = "RGB", (512, 512)
+
+            def convert(self, mode):
+                return self
+
+            def resize(self, size, *a):
+                return self
+
+            def save(self, path):
+                open(path, "wb").close()
+
+        class Pipe:
+            def __call__(self, **kwargs):
+                calls.append(kwargs)
+                kwargs["callback_on_step_end"](self, 0, 0, {})
+                return types.SimpleNamespace(images=[Picture()])
+
+            def enable_lora(self):
+                calls.append("lora on")
+
+            def disable_lora(self):
+                calls.append("lora off")
+
+            def set_adapters(self, names, adapter_weights):
+                calls.append(("scale", adapter_weights[0]))
+        torch = types.ModuleType("torch")
+        torch.Generator = lambda device: types.SimpleNamespace(manual_seed=lambda s: ("gen", s))
+        with tempfile.TemporaryDirectory() as tmp, \
+                mock.patch.dict(sys.modules, {"torch": torch}), \
+                mock.patch.multiple(server, PIPES=mock.Mock(image=None, views=Pipe()),
+                                    VIEWS_FAMILY="flux2", VIEWS_LORA="o/n/l.safetensors",
+                                    on_white=lambda im: im, editing_size=lambda im: im,
+                                    log=mock.Mock()):
+            job = server.Job("views", "a ceramic owl", None, {"seed": 7, "views": ["left", "back"]}, "owl")
+            job.dir = tmp
+            server.CURRENT[0] = job
+            try:
+                server.make_views(job)
+            finally:
+                server.CURRENT[0] = None
+        self.assertEqual(job.files, ["owl-front.png", "owl-left.png", "owl-back.png"])
+        front, left, back = [c for c in calls if isinstance(c, dict)]
+        self.assertNotIn("image", front)                        # FLUX.2 made the front from text
+        self.assertIn("a ceramic owl, front view", front["prompt"])
+        self.assertEqual(calls[0], "lora off")                  # no camera LoRA for the front
+        self.assertIn(("scale", 0.9), calls)
+        self.assertEqual(left["prompt"], "<sks> left side view eye-level shot medium shot")
+        self.assertEqual(back["prompt"], "<sks> back view eye-level shot medium shot")
+        self.assertEqual((back["width"], back["height"], back["generator"]), (512, 512, ("gen", 7)))
+        self.assertEqual(len(left["image"]), 1)
+
+    def test_qwen_edit_is_called_with_true_cfg(self):
+        from kami import server
+        seen = {}
+
+        class Pipe:
+            def __call__(self, prompt, image, num_inference_steps, true_cfg_scale, negative_prompt,
+                         guidance_scale, callback_on_step_end, generator=None):
+                seen.update(true_cfg_scale=true_cfg_scale, negative=negative_prompt)
+                return types.SimpleNamespace(images=["picture"])
+        with mock.patch.dict(sys.modules, {"torch": types.ModuleType("torch")}), \
+                mock.patch.multiple(server, PIPES=mock.Mock(views=Pipe()), VIEWS_FAMILY="qwen-edit"):
+            out = server.views_call("<sks> back view", {"steps": 4, "guidance": 4.0}, "front")
+        self.assertEqual((out, seen), ("picture", {"true_cfg_scale": 4.0, "negative": " "}))
+
+    def test_the_cli_names_the_views_for_kami_mesh(self):
+        saved = [Path("out/owl-front.png"), Path("out/owl-left-2.png"), Path("out/owl-back.png"),
+                 Path("out/owl-front-left.png")]
+        self.assertEqual(cli.mesh_command(saved),
+                         "kami mesh front=out/owl-front.png left=out/owl-left-2.png back=out/owl-back.png"
+                         .replace("/", os.sep))
+
+    def test_the_page_builds_a_views_job(self):
+        (label, body), = webui.build_bodies({"kind": "views", "prompt": " an owl ",
+                                             "angles": ["left", "back", "left"],
+                                             "params": {"seed": 3, "lora_scale": None}})
+        self.assertEqual(body, {"kind": "views", "prompt": "an owl", "name": "an-owl",
+                                "params": {"seed": 3, "views": ["left", "back"]}})
+        png = base64.b64encode(b"png").decode()
+        (_, body), = webui.build_bodies({"kind": "views", "front": {"name": "owl.png", "data": png}})
+        self.assertEqual((body["image"], body["name"]), (png, "owl"))
+        with self.assertRaisesRegex(ValueError, "angles must be"):
+            webui.build_bodies({"kind": "views", "prompt": "x", "angles": ["up"]})
 
 
 def _has_pillow():

@@ -92,7 +92,8 @@ def weight_files(files) -> list[tuple[str, int]]:
 
 def split_repo(entry: str) -> tuple[str, str]:
     """("org/name", "folder") of a profile repo entry: "org/name/folder" stands for the
-    part of a repo under that folder (Hunyuan3D-2 keeps several models in one repo)."""
+    part of a repo under that folder (Hunyuan3D-2 keeps several models in one repo), or
+    for one file of it ("org/name/lora.safetensors": a LoRA)."""
     parts = entry.split("/")
     return "/".join(parts[:2]), "/".join(parts[2:])
 
@@ -102,7 +103,7 @@ def entry_files(entry: str, timeout: float | None = None) -> list[tuple[str, int
     repo, folder = split_repo(entry)
     files = repo_files(repo) if timeout is None else repo_files(repo, timeout)
     if folder:
-        files = tuple(f for f in files if f[0].startswith(folder + "/"))
+        files = tuple(f for f in files if f[0] == folder or f[0].startswith(folder + "/"))
     return weight_files(files)
 
 

@@ -54,6 +54,8 @@ section { margin: 20px 0; }
 .tab { border: 0; background: none; padding: 7px 12px; border-radius: 8px; cursor: pointer; color: var(--dim); }
 .tab[aria-selected="true"] { background: var(--stage); color: var(--text); font-weight: 500; }
 .tab:disabled { opacity: .4; cursor: not-allowed; }
+.angles { border: 0; padding: 0; margin: 0; display: flex; flex-wrap: wrap; gap: 6px 14px; }
+.angles legend { padding: 0; margin-bottom: 6px; font-size: 13px; opacity: .8; }
 .form { padding: 16px; display: grid; gap: 14px; }
 .form[hidden] { display: none; }
 .blocked { padding: 18px 16px; color: var(--dim); }
@@ -163,6 +165,7 @@ body.has-full::before { content: ""; position: fixed; inset: 0; background: rgba
         <button type="button" class="tab" role="tab" data-tab="mesh" aria-selected="true">Image → mesh</button>
         <button type="button" class="tab" role="tab" data-tab="image" aria-selected="false">Text → image</button>
         <button type="button" class="tab" role="tab" data-tab="text-to-mesh" aria-selected="false">Text → mesh</button>
+        <button type="button" class="tab" role="tab" data-tab="views" aria-selected="false">Text → views</button>
       </div>
       <p class="blocked" id="blocked">Checking the pod…</p>
 
@@ -214,6 +217,38 @@ body.has-full::before { content: ""; position: fixed; inset: 0; background: rgba
         </details>
         <div class="actions">
           <button type="submit" class="btn primary">Make image</button>
+          <span class="notice" data-notice></span>
+        </div>
+      </form>
+
+      <form class="form" data-form="views" hidden>
+        <textarea name="prompt" placeholder="A ceramic owl"></textarea>
+        <div class="opts">
+          <label>Front picture<input name="front" type="file"
+            accept=".png,.jpg,.jpeg,.webp,.avif,.heic,.heif,.tif,.tiff,.bmp,.gif"></label>
+          <label>Seed<input name="seed" type="number" placeholder="random"></label>
+        </div>
+        <fieldset class="angles">
+          <legend>Views besides the front</legend>
+          <label class="check"><input type="checkbox" name="angle" value="left" checked>left</label>
+          <label class="check"><input type="checkbox" name="angle" value="back" checked>back</label>
+          <label class="check"><input type="checkbox" name="angle" value="right" checked>right</label>
+          <label class="check"><input type="checkbox" name="angle" value="front-left">front-left</label>
+          <label class="check"><input type="checkbox" name="angle" value="front-right">front-right</label>
+          <label class="check"><input type="checkbox" name="angle" value="back-left">back-left</label>
+          <label class="check"><input type="checkbox" name="angle" value="back-right">back-right</label>
+        </fieldset>
+        <p class="notice" id="views-hint"></p>
+        <details>
+          <summary>Options</summary>
+          <div class="opts">
+            <label>Steps<input name="steps" type="number" min="1" placeholder="default"></label>
+            <label>Guidance<input name="guidance" type="number" step="0.1" min="0" placeholder="default"></label>
+            <label>LoRA weight<input name="lora_scale" type="number" step="0.05" min="0" max="1.5" placeholder="0.9"></label>
+          </div>
+        </details>
+        <div class="actions">
+          <button type="submit" class="btn primary">Make views</button>
           <span class="notice" data-notice></span>
         </div>
       </form>
@@ -311,7 +346,12 @@ function renderPod() {
 function renderForms() {
   const s = served(), blocked = $("#blocked");
   const can = {"mesh": !!s.mesh_model, "image": !!s.image_model,
-               "text-to-mesh": !!(s.mesh_model && s.image_model)};
+               "text-to-mesh": !!(s.mesh_model && s.image_model), "views": !!s.views_model};
+  $("#views-hint").textContent = s.views_model
+    ? (s.views_from_prompt ? "The front is made from the text, or give your own picture of it. "
+                           : "This pod's " + s.views_model + " edits pictures: give a front picture. ")
+      + "Then " + s.views_model + " turns the camera around it."
+    : "";
   if (!ready()) {
     const p = pod && pod.pod;
     blocked.innerHTML = "";
@@ -479,6 +519,25 @@ $$(".form").forEach(form => form.addEventListener("submit", async e => {
             params};
   } else if (kind === "image") {
     body = {kind, prompt: form.elements.prompt.value, count: num(form, "count") || 1, params: imageParams(form)};
+  } else if (kind === "views") {
+    const file = form.elements.front.files[0];
+    const angles = [...form.querySelectorAll('[name="angle"]:checked')].map(i => i.value);
+    if (!angles.length) { notice.className = "notice bad"; notice.textContent = "Pick at least one view"; return; }
+    if (!file && !form.elements.prompt.value.trim()) {
+      notice.className = "notice bad"; notice.textContent = "Write the concept, or give a front picture"; return;
+    }
+    body = {kind, prompt: form.elements.prompt.value, angles,
+            params: {seed: num(form, "seed"), steps: num(form, "steps"), guidance: num(form, "guidance"),
+                     lora_scale: num(form, "lora_scale")}};
+    if (file) {
+      const data = await new Promise((done, fail) => {
+        const reader = new FileReader();
+        reader.onload = () => done(String(reader.result).split(",")[1]);
+        reader.onerror = () => fail(new Error("Could not read " + file.name));
+        reader.readAsDataURL(file);
+      });
+      body.front = {name: file.name, data};
+    }
   } else {
     const seed = num(form, "seed");
     body = {kind, prompt: form.elements.prompt.value,

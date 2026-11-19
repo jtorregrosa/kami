@@ -55,6 +55,7 @@ MULTIVIEW_MODES = ("stochastic", "multidiffusion")
 MAX_VIEWS = 8                    # views of one object in one job (the pod may take fewer)
 IMAGE_PARAMS = {"seed": int, "steps": int, "guidance": float, "width": int, "height": int,
                 "negative": str}
+VIEWS_PARAMS = {"seed": int, "steps": int, "guidance": float, "lora_scale": float}
 
 
 # --- results (the gallery) ---
@@ -342,7 +343,34 @@ def build_bodies(request: dict) -> list[tuple[str, dict]]:
         return [(f"Mesh from text: {prompt}",
                  {"kind": "text-to-mesh", "prompt": prompt, "name": jobs.safe_name(prompt),
                   "params": params})]
-    raise ValueError("kind must be mesh, image or text-to-mesh")
+    if kind == "views":
+        params = _params(request.get("params"), VIEWS_PARAMS)
+        angles = request.get("angles")
+        if angles is not None:
+            if (not isinstance(angles, list) or not angles
+                    or not all(a in jobs.VIEW_ANGLES for a in angles)):
+                raise ValueError(f"angles must be some of {', '.join(jobs.VIEW_ANGLES)}")
+            params["views"] = list(dict.fromkeys(angles))
+        front = request.get("front")
+        if front is not None:
+            if not isinstance(front, dict):
+                raise ValueError("front must be {name, data}")
+            name = str(front.get("name") or "front")
+            if Path(name).suffix.lower() not in jobs.IMAGE_SUFFIXES:
+                raise ValueError(f"{name}: not an image kami can send ({', '.join(jobs.IMAGE_SUFFIXES)})")
+            try:
+                data = base64.b64decode(front.get("data") or "", validate=True)
+            except (binascii.Error, ValueError, TypeError):
+                raise ValueError(f"{name}: the image data is not valid base64") from None
+            if not data or len(data) > jobs.MAX_IMAGE_BYTES:
+                raise ValueError(f"{name}: empty, or over {jobs.MAX_IMAGE_BYTES // 2**20} MiB")
+            return [(f"Views of {name}",
+                     {"kind": "views", "image": base64.b64encode(data).decode(),
+                      "name": jobs.safe_name(Path(name).stem), "params": params})]
+        prompt = _prompt(request)
+        return [(f"Views: {prompt}", {"kind": "views", "prompt": prompt,
+                                       "name": jobs.safe_name(prompt), "params": params})]
+    raise ValueError("kind must be mesh, image, text-to-mesh or views")
 
 
 # --- the pod's state ---

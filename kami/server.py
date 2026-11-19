@@ -23,15 +23,21 @@ Environment (set by `kami up`):
   KAMI_MESH_BACKEND    "trellis2" (default) or "hunyuan" (KAMI_MESH_MODEL is a Hunyuan3D-2 repo)
   KAMI_MESH_SUBFOLDER  Hunyuan3D-2: the repo folder of the shape model (-mv: named views)
   KAMI_PAINT_MODEL     Hunyuan3D-2: the repo of Hunyuan3D-Paint (texture)
+  KAMI_VIEWS_MODEL     diffusers image-editing repo that turns the camera around a front
+                       picture ("views" jobs): Qwen-Image-Edit-2511 or FLUX.2 [dev]
+  KAMI_VIEWS_LORA      its camera LoRA, "org/name/file.safetensors"
+  KAMI_VIEWS_DEFAULTS  JSON of default views parameters (steps, guidance, lora_scale...)
 
 Endpoints:
   GET  /health                     200 once the pipelines are loaded (503 before)
   GET  /metrics                    Prometheus text: jobs running / queued / finished
   GET  /v1/info                    what this server can do, and the defaults
-  POST /v1/jobs                    {"kind": "mesh"|"image"|"text-to-mesh", "image": <base64>,
+  POST /v1/jobs                    {"kind": "mesh"|"image"|"text-to-mesh"|"views", "image": <base64>,
                                     "prompt": str, "params": {...}} -> {"id": ...}; or, for
                                     several views of one object, "images": [{"image":
                                     <base64>, "view": "front"|"left"|"back"|"right"|null}]
+                                   "views": a prompt (or a front "image") -> <name>-front.png and
+                                    the views params["views"] names (left, back, right...)
   GET  /v1/jobs                    every job kept: running, queue (in order), finished
   GET  /v1/jobs/<id>               {"status": queued|running|done|error, "stage", "step",
                                     "steps", "progress" (0..1), "position", "files", ...}
@@ -94,6 +100,25 @@ HUNYUAN_VIEWS = ("front", "left", "back", "right")
 MAX_VIEWS = 8
 MULTIVIEW_MODES = ("stochastic", "multidiffusion")
 
+# "views" jobs: an image-editing pipeline with a camera LoRA turns the camera around a
+# front picture. Both LoRAs kami knows (fal's for Qwen-Image-Edit-2511, lovis93's for
+# FLUX.2 [dev]) take "<sks> <azimuth> view <elevation> <distance>".
+VIEWS_MODEL = os.environ.get("KAMI_VIEWS_MODEL", "")
+VIEWS_LORA = os.environ.get("KAMI_VIEWS_LORA", "")
+VIEWS_FAMILY = "flux2" if "flux.2" in VIEWS_MODEL.lower() else "qwen-edit"
+VIEWS_DEFAULTS = {"steps": 28 if VIEWS_FAMILY == "flux2" else 40, "guidance": 4.0,
+                  "lora_scale": 0.9, "elevation": "eye-level shot", "distance": "medium shot",
+                  "views": ["left", "back", "right"]}
+VIEWS_DEFAULTS.update(json.loads(os.environ.get("KAMI_VIEWS_DEFAULTS") or "{}"))
+# view name -> the LoRA's azimuth (0 front, 90 right side, 180 back, 270 left side)
+VIEW_ANGLES = {"front": "front view", "front-right": "front-right quarter view",
+               "right": "right side view", "back-right": "back-right quarter view",
+               "back": "back view", "back-left": "back-left quarter view",
+               "left": "left side view", "front-left": "front-left quarter view"}
+# the front picture of a concept: what a mesh model wants to see
+FRONT_HINT = ("front view of the whole object, centred, full view, on a plain white "
+              "background, soft even studio light")
+
 
 def log(msg):
     print(f"[kami-server] {msg}", flush=True)
@@ -136,6 +161,7 @@ class Pipelines:
     def __init__(self):
         self.mesh = None
         self.image = None
+        self.views = None
         self.on_gpu = None
         self.ready = False
         self.error = None
@@ -183,20 +209,44 @@ class Pipelines:
                 self.image.to("cuda")
                 self.on_gpu = "image" if not self.mesh else self.on_gpu
             log(f"image pipeline ready in {time.monotonic() - started:.0f} s")
+        if VIEWS_MODEL:
+            started = time.monotonic()
+            log(f"loading views pipeline {VIEWS_MODEL}" + (f" + LoRA {VIEWS_LORA}" if VIEWS_LORA else ""))
+            from diffusers import DiffusionPipeline
+            # a pre-quantised repo (diffusers/FLUX.2-dev-bnb-4bit) brings its own
+            # quantisation config: its 4-bit parts load straight onto the GPU
+            self.views = DiffusionPipeline.from_pretrained(VIEWS_MODEL, torch_dtype=torch.bfloat16)
+            if VIEWS_LORA:
+                repo, weight = lora_parts(VIEWS_LORA)
+                self.views.load_lora_weights(repo, weight_name=weight, adapter_name="views")
+            if OFFLOAD:
+                _to(self.views, "cpu")
+            else:
+                try:
+                    self.views.to("cuda")
+                except (ValueError, RuntimeError, NotImplementedError) as e:
+                    # some diffusers versions refuse .to() on 4-bit (bitsandbytes) parts;
+                    # their FLUX.2 4-bit example offloads instead
+                    log(f"views pipeline: .to('cuda') refused ({e}): model CPU offload instead")
+                    self.views.enable_model_cpu_offload()
+                self.on_gpu = self.on_gpu or "views"
+            log(f"views pipeline ready in {time.monotonic() - started:.0f} s")
         self.ready = True
 
     def use(self, which):
-        """Have `which` ("mesh" / "image") on the GPU, moving the other one out (OFFLOAD)."""
+        """Have `which` ("mesh" / "image" / "views") on the GPU, moving the others out
+        (OFFLOAD)."""
         if not OFFLOAD or self.on_gpu == which:
             return
         import torch
         stage("to_gpu")
-        other = {"mesh": self.image, "image": self.mesh}[which]
-        if other is not None:
-            _to(other, "cpu")
+        loaded = {"mesh": self.mesh, "image": self.image, "views": self.views}
+        for name, pipe in loaded.items():
+            if name != which and pipe is not None:
+                _to(pipe, "cpu")
         gc.collect()
         torch.cuda.empty_cache()
-        _to(self.mesh if which == "mesh" else self.image, "cuda")
+        _to(loaded[which], "cuda")
         self.on_gpu = which
 
 
@@ -348,6 +398,101 @@ def make_image(prompt, params, out_path):
     return image
 
 
+def lora_parts(entry):
+    """("org/name", "file.safetensors") of a LoRA entry "org/name/file.safetensors"."""
+    parts = entry.split("/")
+    return "/".join(parts[:2]), "/".join(parts[2:]) or None
+
+
+def on_white(image):
+    """An RGB picture: a cut-out one on white (the editing models want a plain backdrop)."""
+    from PIL import Image
+    if image.mode != "RGBA":
+        return image.convert("RGB")
+    backdrop = Image.new("RGB", image.size, (255, 255, 255))
+    backdrop.paste(image, mask=image.getchannel("A"))
+    return backdrop
+
+
+def editing_size(image, longest=1024):
+    """The picture at most `longest` px on its long side, both sides a multiple of 16."""
+    from PIL import Image
+    scale = min(1.0, longest / max(image.size))
+    w, h = (max(16, int(v * scale) // 16 * 16) for v in image.size)
+    return image if (w, h) == image.size else image.resize((w, h), Image.Resampling.LANCZOS)
+
+
+def view_prompt(name, p):
+    """The camera LoRA's prompt for view `name`: '<sks> back view eye-level shot medium shot'."""
+    return f"<sks> {VIEW_ANGLES[name]} {p['elevation']} {p['distance']}"
+
+
+def _lora(enabled, scale=1.0):
+    """Turn the views pipeline's camera LoRA on (at `scale`) or off."""
+    pipe = PIPES.views
+    if not VIEWS_LORA:
+        return
+    if enabled:
+        pipe.enable_lora()
+        pipe.set_adapters(["views"], adapter_weights=[float(scale)])
+    else:
+        pipe.disable_lora()
+
+
+def views_call(prompt, p, image=None, width=1024, height=1024):
+    """One picture from the views pipeline: an edit of `image`, or (FLUX.2) from text."""
+    import torch
+    steps = int(p["steps"])
+
+    def on_step(pipe, i, t, tensors):
+        step(i + 1, steps)
+        return tensors
+    kwargs = {"prompt": prompt, "num_inference_steps": steps, "callback_on_step_end": on_step}
+    if p.get("seed") is not None:
+        kwargs["generator"] = torch.Generator("cuda").manual_seed(int(p["seed"]))
+    if image is not None:
+        kwargs["image"] = [image]
+    if VIEWS_FAMILY == "flux2":
+        kwargs.update(guidance_scale=float(p["guidance"]), width=width, height=height)
+    else:
+        # Qwen-Image-Edit: true CFG with an empty negative prompt, as in its model card
+        kwargs.update(true_cfg_scale=float(p["guidance"]), negative_prompt=" ", guidance_scale=1.0)
+    pipe = PIPES.views
+    return pipe(**_accepted(pipe.__call__, kwargs)).images[0]
+
+
+def make_views(job):
+    """A front picture (given, or made from the prompt) and the camera turned around it:
+    <name>-front.png, <name>-left.png... for `kami mesh front=... left=...`."""
+    p = {**VIEWS_DEFAULTS, **job.params}
+    names = [n for n in p["views"] if n != "front"]
+
+    def save(image, view):
+        path = os.path.join(job.dir, f"{job.name}-{view}.png")
+        image.save(path)
+        job.files.append(os.path.basename(path))
+    if job.image_bytes:
+        front = open_image(job.image_bytes[0][1])
+    elif PIPES.image is not None:
+        image_params = dict(job.params.get("image") or {})
+        if p.get("seed") is not None:
+            image_params.setdefault("seed", p["seed"])
+        front = make_image(f"{job.prompt}, {FRONT_HINT}", image_params,
+                           os.path.join(job.dir, "front-raw.png"))
+    else:                                    # FLUX.2: the same model makes the front picture
+        PIPES.use("views")
+        stage("image")
+        _lora(False)
+        front = views_call(f"{job.prompt}, {FRONT_HINT}", p)
+    front = editing_size(on_white(front))
+    save(front, "front")
+    PIPES.use("views")
+    stage("views", loops=len(names))
+    _lora(True, p["lora_scale"])
+    for name in names:
+        save(views_call(view_prompt(name, p), p, front, *front.size), name)
+
+
 def make_mesh(views, params, out_path):
     """`views`: [(view name or None, PIL image)], one or several views of one object."""
     p = {**MESH_DEFAULTS, **params}
@@ -482,6 +627,7 @@ STAGES = {
     "decode": "Decoding the mesh",
     "glb": "Baking the GLB (remesh, texture)",
     "to_gpu": "Moving the model to the GPU",       # offload only; no share of its own
+    "views": "Turning the camera around the object",
 }
 MESH_PLAN = (("prepare", .04), ("condition", .04), ("structure", .12), ("shape", .34),
              ("texture", .22), ("decode", .08), ("glb", .16))
@@ -491,6 +637,7 @@ PLANS = {
     "image": (("image", 1.0),),
     "mesh": MESH_PLAN,
     "text-to-mesh": (("image", .2),) + tuple((k, w * .8) for k, w in MESH_PLAN),
+    "views": (("image", .2), ("views", .8)),
 }
 
 
@@ -730,6 +877,8 @@ def opencv_image(data, error):
 
 def run(job):
     os.makedirs(job.dir, exist_ok=True)
+    if job.kind == "views":
+        return make_views(job)
     if job.kind == "image":
         path = os.path.join(job.dir, f"{job.name}.png")
         make_image(job.prompt, job.params, path)
@@ -795,7 +944,7 @@ def prune():
             shutil.rmtree(job.dir, ignore_errors=True)
 
 
-KINDS = ("mesh", "image", "text-to-mesh")
+KINDS = ("mesh", "image", "text-to-mesh", "views")
 
 
 def view_limits():
@@ -850,6 +999,22 @@ def mesh_views(body):
     return [tuple(v) for v in views]
 
 
+def check_views_params(params, has_front):
+    """Raise ValueError if a views job's params are wrong."""
+    names = params.get("views", VIEWS_DEFAULTS["views"])
+    if (not isinstance(names, list) or not names
+            or not all(isinstance(n, str) and n in VIEW_ANGLES for n in names)):
+        raise ValueError(f"views must be a list of: {', '.join(VIEW_ANGLES)}")
+    if len(set(names)) != len(names):
+        raise ValueError("each view may appear once")
+    for key in ("elevation", "distance"):
+        if key in params and not isinstance(params[key], str):
+            raise ValueError(f"{key} must be text, like {VIEWS_DEFAULTS[key]!r}")
+    if not has_front and PIPES.image is None and VIEWS_FAMILY != "flux2":
+        raise ValueError(f"{VIEWS_MODEL} edits pictures: give a front image, or use a "
+                         "profile with an image_model to make one from the prompt")
+
+
 def submit(body):
     """A new job from a request body, or raise ValueError with what is wrong with it."""
     kind = body.get("kind")
@@ -859,19 +1024,30 @@ def submit(body):
         raise ValueError("this pod serves no mesh model (profile without mesh_model)")
     if kind in ("image", "text-to-mesh") and PIPES.image is None:
         raise ValueError("this pod serves no image model (profile without image_model)")
-    image_bytes = mesh_views(body) if kind == "mesh" else None
+    if kind == "views" and PIPES.views is None:
+        raise ValueError("this pod serves no views model (profile without views_model)")
     prompt = body.get("prompt") or ""
-    if kind != "mesh" and not prompt.strip():
-        raise ValueError(f"a {kind} job needs a prompt")
+    if kind == "mesh":
+        image_bytes = mesh_views(body)
+    elif kind == "views" and body.get("image"):
+        image_bytes = mesh_views({"image": body["image"]})[:1]
+    else:
+        image_bytes = None
+    if kind != "mesh" and not image_bytes and not prompt.strip():
+        raise ValueError(f"a {kind} job needs a prompt" + (" or a front image" if kind == "views" else ""))
     params = body.get("params") or {}
     if not isinstance(params, dict):
         raise ValueError("params must be an object")
+    if kind == "views":
+        check_views_params(params, bool(image_bytes))
     mode = (params.get("mesh", params) if isinstance(params.get("mesh", params), dict) else {}).get(
         "multiview_mode")
     if mode is not None and mode not in MULTIVIEW_MODES:
         raise ValueError(f"multiview_mode must be one of {', '.join(MULTIVIEW_MODES)}")
     name = "".join(c for c in str(body.get("name") or "") if c.isalnum() or c in "-_")[:60]
     job = Job(kind, prompt, image_bytes, params, name)
+    if kind == "views" and image_bytes:
+        job.plan = (("views", 1.0),)            # no picture to make first
     with LOCK:
         JOBS[job.id] = job
         QUEUE_ORDER.append(job.id)
@@ -930,7 +1106,13 @@ class Handler(BaseHTTPRequestHandler):
                                    "max_views": view_limits()[0] if MESH_MODEL else 0,
                                    "view_names": list(view_limits()[1] or []) or None,
                                    "multiview_modes": list(MULTIVIEW_MODES)
-                                   if MESH_BACKEND == "trellis2" else None})
+                                   if MESH_BACKEND == "trellis2" else None,
+                                   "views_model": VIEWS_MODEL or None,
+                                   "views_lora": VIEWS_LORA or None,
+                                   "views_defaults": VIEWS_DEFAULTS if VIEWS_MODEL else None,
+                                   "view_angles": list(VIEW_ANGLES) if VIEWS_MODEL else None,
+                                   "views_from_prompt": bool(VIEWS_MODEL) and (
+                                       bool(IMAGE_MODEL) or VIEWS_FAMILY == "flux2")})
         if path == "/v1/jobs":
             return self.send(200, listing())
         parts = path.split("/")
@@ -996,8 +1178,8 @@ def main():
     if not API_KEY:
         log("KAMI_API_KEY is not set: refusing to serve without authentication")
         sys.exit(2)
-    if not MESH_MODEL and not IMAGE_MODEL:
-        log("neither KAMI_MESH_MODEL nor KAMI_IMAGE_MODEL is set: nothing to serve")
+    if not MESH_MODEL and not IMAGE_MODEL and not VIEWS_MODEL:
+        log("none of KAMI_MESH_MODEL, KAMI_IMAGE_MODEL, KAMI_VIEWS_MODEL is set: nothing to serve")
         sys.exit(2)
     server = ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
     threading.Thread(target=server.serve_forever, daemon=True).start()

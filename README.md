@@ -138,6 +138,35 @@ kami mesh front=a.png left=b.png back=c.png -p hunyuan-mv         # Hunyuan3D-2m
   (`VIEW=IMAGE`; unnamed ones take the free names in that order). Its texture is painted
   from the front view. See the licence note below before using it.
 
+### Views from a concept
+
+No photos of the back? `kami views` makes them: a front picture of the concept, then an
+image-editing model with a camera LoRA turns the camera around it. The pictures it saves
+(`owl-front.png`, `owl-left.png`, `owl-back.png`, `owl-right.png`) go straight into
+`kami mesh` on a Hunyuan3D-2mv pod (it prints the command):
+
+```powershell
+kami up -p views-qwen                                  # or views-flux
+kami views "a ceramic owl" --seed 7                    # front + left, back, right
+kami views --front owl.png                             # start from your own front picture
+kami views "a robot" --angles left back right front-left back-right
+kami down
+kami up -p hunyuan-mv
+kami mesh front=kami-out/a-ceramic-owl-front.png left=kami-out/a-ceramic-owl-left.png back=kami-out/a-ceramic-owl-back.png right=kami-out/a-ceramic-owl-right.png
+```
+
+Two profiles, to compare which turns the camera better:
+
+| Profile | Front picture | Turns the camera | GPU |
+|---|---|---|---|
+| `views-qwen` | Z-Image-Turbo | Qwen-Image-Edit-2511 + fal's Multiple-Angles LoRA (96 poses) | 80 GB |
+| `views-flux` | FLUX.2 [dev] | FLUX.2 [dev] (4-bit) + lovis93's Multi-Angles LoRA v2 (72 poses) | 48 GB |
+
+`--elevation` and `--distance` take the LoRA's own words ("eye-level shot", "high-angle
+shot"; "medium shot", "wide shot"). The view the model invents (the back above all) may
+not match the front: look at them before making the mesh. kami ui has a "Text → views"
+tab.
+
 `kami ui` has the same switch ("One object: the images are views of it").
 
 **`kami ui`** does all of this from a web page on your PC: drop images to make meshes,
@@ -168,6 +197,7 @@ If the cloud has no stock, `kami up` **waits** for it (nothing is billed while w
 | `kami mesh IMAGE...` | Image(s) → textured GLB (`--seed`, `--texture-size`, `--decimation-target`, `--no-remesh`; `--views` for one mesh from several views, `--view-mode`) |
 | `kami mesh --prompt TEXT` | Text → image → GLB (needs a profile with both models) |
 | `kami image PROMPT` | Text → PNG (`-n`, `--seed`, `--steps`, `--guidance`, `--width`, `--height`) |
+| `kami views CONCEPT` | Concept → front, left, back, right pictures of it, for `kami mesh` with views (`--front IMAGE`, `--angles`, `--seed`, `--steps`, `--guidance`, `--lora-scale`, `--elevation`, `--distance`) |
 | `kami ui [FOLDER]` | Web page on this PC: make meshes and images on the pod, browse the results (`--port`, `--no-browser`) |
 | `kami jobs` | The pod's jobs, whoever sent them: stage and progress of the running one, the queue, the last ones (`--watch`, `--json`) |
 | `kami reload` | Send this kami's server code to the running pod and restart the server: no new pod, no download (`--force` with jobs running) |
@@ -264,8 +294,11 @@ kami itself is MIT. The models have their own terms. Check them for your use:
   Korea** ([LICENSE](https://huggingface.co/tencent/Hunyuan3D-2/blob/main/LICENSE)). kami
   refuses a profile with a Hunyuan3D-2 model until it says `accept_hunyuan_license = true`:
   set it only if the licence covers you. Those profiles run on the `-hunyuan` image
-  (`docker/Dockerfile.hunyuan`, the workflow's `variant = hunyuan`), and are commented
-  out in this repo's `kami.toml`.
+  (`docker/Dockerfile.hunyuan`, the workflow's `variant = hunyuan`).
+- **Qwen-Image-Edit-2511** (`views-qwen`): Apache-2.0; fal's Multiple-Angles LoRA:
+  Apache-2.0.
+- **FLUX.2 [dev]** (`views-flux`): **FLUX [dev] Non-Commercial License**; lovis93's
+  Multi-Angles LoRA v2: CreativeML OpenRAIL-M.
 
 ## How it works
 

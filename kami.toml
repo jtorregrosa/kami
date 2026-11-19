@@ -94,3 +94,36 @@ mesh_defaults = { steps = 50, octree_resolution = 380, guidance = 5.0, decimatio
 [profiles.hunyuan-mv]
 extends = "hunyuan"
 mesh_model = "tencent/Hunyuan3D-2mv"
+
+# Views of one object from a concept (`kami views "a ceramic owl"`): the front picture
+# first, then a camera LoRA turns the camera around it (left, back, right...), for
+# `kami mesh front=... left=... back=... right=...` on a Hunyuan3D-2mv pod.
+#
+# views-qwen: Z-Image-Turbo makes the front, Qwen-Image-Edit-2511 (20B, Apache-2.0) with
+# fal's Multiple-Angles LoRA (96 camera poses, Apache-2.0) turns it. Qwen-Edit in bf16 is
+# ~57 GB: an 80 GB card, the two models taking turns on it (offload).
+[profiles.views-qwen]
+image_model = "Tongyi-MAI/Z-Image-Turbo"
+image_defaults = { steps = 8, guidance = 0.0, width = 1024, height = 1024 }
+views_model = "Qwen/Qwen-Image-Edit-2511"
+views_lora = "fal/Qwen-Image-Edit-2511-Multiple-Angles-LoRA/qwen-image-edit-2511-multiple-angles-lora.safetensors"
+views_defaults = { steps = 40, guidance = 4.0, lora_scale = 0.9 }
+offload = true
+gpus = ["A100 SXM 80GB", "A100 PCIe 80GB", "H100 PCIe", "H100 SXM", "H100 NVL"]
+min_vram_gb = 80
+min_ram_gb = 96          # both models wait in RAM between turns
+disk_gb = 140
+
+# views-flux: FLUX.2 [dev] makes the front and turns it, with lovis93's Multi-Angles LoRA
+# v2 (72 camera poses, OpenRAIL-M). FLUX.2 [dev] is NON-COMMERCIAL (FLUX [dev] licence).
+# The NF4 (4-bit) repo fits a 48 GB card; for full bf16 use
+# views_model = "black-forest-labs/FLUX.2-dev" (gated: accept it on Hugging Face) on an
+# 80 GB card with offload, or more.
+[profiles.views-flux]
+views_model = "diffusers/FLUX.2-dev-bnb-4bit"
+views_lora = "lovis93/Flux-2-Multi-Angles-LoRA-v2/flux-multi-angles-v2-72poses-fal.safetensors"
+views_defaults = { steps = 28, guidance = 4.0, lora_scale = 0.9 }
+gpus = ["L40S", "RTX A6000", "L40", "RTX 6000 Ada", "A100 PCIe 80GB"]
+min_vram_gb = 48
+min_ram_gb = 64
+disk_gb = 60           # ~34 GB of weights

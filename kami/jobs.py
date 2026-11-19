@@ -72,6 +72,9 @@ def info(url: str, api_key: str) -> dict:
 
 
 VIEW_NAMES = ("front", "left", "back", "right")     # Hunyuan3D-2mv's; TRELLIS.2 needs none
+# the views `kami views` can make (the camera LoRAs' azimuths: 0 front, 90 right...)
+VIEW_ANGLES = ("front", "front-right", "right", "back-right", "back", "back-left", "left",
+               "front-left")
 
 
 def view_arg(text: str) -> tuple[str | None, str]:

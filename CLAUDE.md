@@ -23,7 +23,7 @@ Your PC ── kami mesh photo.png ──HTTPS──► https://<pod>-8000.proxy
 
 - `kami/cli.py` — argparse CLI and the commands (`init`, `doctor`, `gpus`, `prices`,
   `profiles`, `volume`, `up`, `down`, `status`, `cost`, `logs`, `watchdog`, `mesh`, `image`,
-  `jobs`, `reload`, `ui`).
+  `views`, `jobs`, `reload`, `ui`).
 - `kami/server.py` — runs *inside the pod* (its source is sent in `KAMI_SERVER_SRC` and
   run with `python3 -c`): loads the pipelines, serves `/health`, `/metrics`, `/v1/info`
   and the jobs API (`POST /v1/jobs`, `GET /v1/jobs` (all, with stage and progress),
@@ -37,6 +37,9 @@ Your PC ── kami mesh photo.png ──HTTPS──► https://<pod>-8000.proxy
   Hunyuan3D-2 (`HunyuanMesh`: hy3dgen shape + Hunyuan3D-Paint, -2mv with named views).
   Hunyuan profiles need `accept_hunyuan_license` (its licence excludes the EU, UK and
   South Korea) and the `-hunyuan` image (`docker/Dockerfile.hunyuan`, built FROM the base).
+  "views" jobs (`views_model`, `KAMI_VIEWS_*`): a front picture (image_model, or FLUX.2
+  itself) and a diffusers editing pipeline with a camera LoRA ("<sks> back view ...")
+  turning around it; Qwen-Image-Edit gets true CFG, FLUX.2 guidance.
   Stdlib HTTP; torch / trellis2 / diffusers are imported lazily, so the tests import it
   without them. kami never imports it at runtime.
 - `kami/jobs.py` — client side of the jobs API: submit, poll with a progress line, download
@@ -86,7 +89,9 @@ image -> GLB job end to end (PNG textures), `kami reload` (on an L40S). Images g
 `server.open_image` (Pillow; pillow-heif for HEIC; OpenCV if Pillow fails; EXIF turned;
 almost opaque alpha dropped so the background is removed). Not run on a real GPU yet: `offload` moving the
 pipelines between CPU and GPU, Z-Image-Turbo, text-to-mesh, the job
-progress hooks, TRELLIS.2 multiview, a whole Hunyuan3D-2 job (the -hunyuan image builds
+progress hooks, TRELLIS.2 multiview, `kami views` (neither profile has run: Qwen-Edit /
+FLUX.2 4-bit loading, the LoRAs through diffusers' converters, the azimuth names vs
+Hunyuan3D-2mv's left/right), a whole Hunyuan3D-2 job (the -hunyuan image builds
 and its pipelines load on a 4090, with `dinov2_v4_checkpoints` and
 `trust_hunyuan_pipelines`; the first jobs failed in pymeshlab, whose plugins needed
 libOpenGL.so.0, now in the image: shape clean-up and Hunyuan3D-Paint never ran), and the guard deleting the pod through GraphQL (the pod-scoped key got 403

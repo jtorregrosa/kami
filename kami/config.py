@@ -118,6 +118,12 @@ class Profile:
     # Hugging Face repos of the pipelines the pod loads; at least one of the two.
     mesh_model: str = ""             # TRELLIS.2 (image -> GLB)
     image_model: str = ""            # diffusers text-to-image
+    # Views of one object (`kami views`): a diffusers image-editing pipeline that turns the
+    # camera around a front picture (Qwen-Image-Edit-2511, FLUX.2 [dev]), with a camera
+    # LoRA ("org/name/file.safetensors"). The front picture of a concept comes from
+    # image_model, or from views_model itself when it also makes images from text (FLUX.2).
+    views_model: str = ""
+    views_lora: str = ""
     # Other repos the pipelines download on load (gated ones must be accepted first);
     # TRELLIS.2's are added by default, see MESH_DEPENDENCIES.
     extra_models: list[str] = field(default_factory=list)
@@ -136,6 +142,7 @@ class Profile:
     # Defaults for the jobs (the server's own when empty): see server.py.
     image_defaults: dict = field(default_factory=dict)
     mesh_defaults: dict = field(default_factory=dict)
+    views_defaults: dict = field(default_factory=dict)
     # Keep the pipeline not in use on the CPU: both fit a smaller GPU, a switch costs seconds.
     offload: bool = False
     # Container disk in GB. In ephemeral mode every model must fit here.
@@ -154,7 +161,7 @@ class Profile:
     @property
     def model(self) -> str:
         """The models, for messages: 'microsoft/TRELLIS.2-4B + Tongyi-MAI/Z-Image-Turbo'."""
-        return " + ".join(m for m in (self.mesh_model, self.image_model) if m)
+        return " + ".join(m for m in (self.mesh_model, self.image_model, self.views_model) if m)
 
     @property
     def mesh_backend(self) -> str:
@@ -170,6 +177,7 @@ class Profile:
         """Every Hugging Face repo the pod downloads on boot. "org/name/folder" is the
         part of a repo under that folder (Hunyuan3D-2 downloads only its folders)."""
         image = [self.image_model] if self.image_model else []
+        image += [m for m in (self.views_model, self.views_lora) if m]
         if self.mesh_backend == "hunyuan":
             paint = self.paint_model or HUNYUAN_PAINT_MODEL
             repos = [f"{self.mesh_model}/{self.shape_subfolder}", *image,
@@ -202,6 +210,16 @@ HUNYUAN_PAINT_FOLDERS = ("hunyuan3d-paint-v2-0-turbo", "hunyuan3d-delight-v2-0")
 HUNYUAN_LICENSE = ("Hunyuan3D-2's licence (Tencent Hunyuan Community) does not apply in the "
                    "European Union, the United Kingdom and South Korea: read it at "
                    "https://huggingface.co/tencent/Hunyuan3D-2/blob/main/LICENSE")
+
+
+def lora_repo(lora: str) -> str:
+    """The repo of a LoRA entry: "org/name" out of "org/name/file.safetensors"."""
+    return "/".join(lora.split("/")[:2]) if lora else ""
+
+
+def views_family(views_model: str) -> str:
+    """How a views_model is called: "flux2" (FLUX.2, also text -> image) or "qwen-edit"."""
+    return "flux2" if "flux.2" in views_model.lower() else "qwen-edit"
 
 
 def mesh_backend(mesh_model: str) -> str:
@@ -263,6 +281,7 @@ DEFAULT_KEYS = {
 
 PROFILE_KEYS = {
     "extends": TEXT, "mesh_model": TEXT, "image_model": TEXT, "extra_models": NAMES,
+    "views_model": TEXT, "views_lora": TEXT, "views_defaults": TABLE,
     "dino_model": TEXT, "rembg_model": TEXT, "mesh_subfolder": TEXT, "paint_model": TEXT,
     "accept_hunyuan_license": BOOL,
     "image_defaults": TABLE, "mesh_defaults": TABLE, "offload": BOOL, "gpus": NAMES,
@@ -279,6 +298,9 @@ RANGES = {"port": (1, 65535), "volume_size_gb": (1, None), "disk_gb": (1, None),
 
 # Job parameters a profile's defaults may set (see server.py).
 IMAGE_PARAMS = ("steps", "guidance", "width", "height", "negative", "seed")
+# views: steps / guidance of the editing pipeline, the LoRA's weight, and the camera's
+# elevation and distance in the LoRA's words ("eye-level shot", "medium shot")
+VIEWS_PARAMS = ("steps", "guidance", "seed", "lora_scale", "elevation", "distance")
 # Both backends: TRELLIS.2 (texture_size, remesh, pipeline_type, multiview_mode) and
 # Hunyuan3D-2 (steps, octree_resolution, guidance, texture); each ignores the others.
 MESH_PARAMS = ("texture_size", "decimation_target", "remesh", "seed", "pipeline_type",
@@ -332,7 +354,8 @@ def _check_table(table: dict, where: str, known: dict, other: dict, other_where:
         if key == "min_cuda" and not re.fullmatch(r"\d+\.\d+", str(value)):
             problems.append(f"{where}: min_cuda must look like \"12.4\" (major.minor), not '{value}'")
         if kind == TABLE:
-            known_params = IMAGE_PARAMS if key == "image_defaults" else MESH_PARAMS
+            known_params = {"image_defaults": IMAGE_PARAMS,
+                            "views_defaults": VIEWS_PARAMS}.get(key, MESH_PARAMS)
             for param in value:
                 if param not in known_params:
                     problems.append(f"{where}: {key} has unknown parameter '{param}' "
@@ -376,8 +399,13 @@ def validate(raw: dict) -> list[str]:
             continue
         if not p.get("gpus"):
             problems.append(f"{where}: needs gpus")
-        if not p.get("mesh_model") and not p.get("image_model"):
-            problems.append(f"{where}: needs mesh_model or image_model (or both)")
+        if not any(p.get(k) for k in ("mesh_model", "image_model", "views_model")):
+            problems.append(f"{where}: needs mesh_model, image_model or views_model")
+        if p.get("views_lora") and not p.get("views_model"):
+            problems.append(f"{where}: views_lora needs a views_model")
+        if p.get("views_lora") and p["views_lora"].count("/") < 2:
+            problems.append(f"{where}: views_lora must be \"org/name/file.safetensors\", "
+                            f"not '{p['views_lora']}'")
         if mesh_backend(p.get("mesh_model", "")) == "hunyuan" and not p.get("accept_hunyuan_license"):
             problems.append(f"{where}: {HUNYUAN_LICENSE}. If it applies to you, set "
                             "accept_hunyuan_license = true")
@@ -419,6 +447,9 @@ def load_config(path: Path | None = None) -> Config:
         profiles[name] = Profile(name=name, gpus=list(p["gpus"]),
                                  mesh_model=p.get("mesh_model", ""),
                                  image_model=p.get("image_model", ""),
+                                 views_model=p.get("views_model", ""),
+                                 views_lora=p.get("views_lora", ""),
+                                 views_defaults=dict(p.get("views_defaults", {})),
                                  extra_models=list(p.get("extra_models", [])),
                                  dino_model=p.get("dino_model", ""),
                                  rembg_model=p.get("rembg_model", ""),

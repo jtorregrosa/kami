@@ -483,6 +483,12 @@ def server_spec(cfg: Config, profile, volume_id: str | None, api_key: str,
         env["KAMI_IMAGE_DEFAULTS"] = json.dumps(profile.image_defaults)
     if profile.mesh_defaults:
         env["KAMI_MESH_DEFAULTS"] = json.dumps(profile.mesh_defaults)
+    if profile.views_model:
+        env["KAMI_VIEWS_MODEL"] = profile.views_model
+        if profile.views_lora:
+            env["KAMI_VIEWS_LORA"] = profile.views_lora
+        if profile.views_defaults:
+            env["KAMI_VIEWS_DEFAULTS"] = json.dumps(profile.views_defaults)
     if profile.offload:
         env["KAMI_OFFLOAD"] = "1"
     if profile.mesh_model and profile.dino_model:
