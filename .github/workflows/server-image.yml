@@ -17,6 +17,10 @@ permissions:
   contents: read
   packages: write
 
+# one build per tag at a time; a second run of the same tag waits instead of racing
+concurrency:
+  group: server-image-${{ inputs.tag || github.ref_name }}
+
 jobs:
   build:
     runs-on: ubuntu-latest
