@@ -44,10 +44,11 @@ RUN printf '#!/bin/sh\nexit 0\n' > /usr/local/bin/nvidia-smi && chmod +x /usr/lo
  && rm -rf /tmp/extensions /root/.cache
 
 # Text -> image: diffusers with Z-Image support (0.36+), and what its pipelines load;
-# peft for the camera LoRAs of `kami views`, bitsandbytes for 4-bit FLUX.2 [dev].
+# peft for the camera LoRAs of `kami views`, bitsandbytes for 4-bit FLUX.2 [dev], and the
+# jinja2 transformers wants for Qwen-Image-Edit's chat template.
 # torch / torchvision / numpy stay as TRELLIS.2's extensions were compiled against.
 RUN pip freeze | grep -iE '^(torch|torchvision|numpy)==' > /tmp/keep.txt \
- && pip install -c /tmp/keep.txt "diffusers>=0.36" accelerate sentencepiece protobuf peft bitsandbytes \
+ && pip install -c /tmp/keep.txt "diffusers>=0.36" accelerate sentencepiece protobuf peft bitsandbytes "jinja2>=3.1.6" \
  && rm -f /tmp/keep.txt
 
 # setup.sh installs pillow-simd over the Pillow its other packages brought: both write

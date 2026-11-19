@@ -304,8 +304,8 @@ def build_bodies(request: dict) -> list[tuple[str, dict]]:
             if len(data) > jobs.MAX_IMAGE_BYTES:
                 raise ValueError(f"{name}: over {jobs.MAX_IMAGE_BYTES // 2**20} MiB, resize it first")
             view = image.get("view") or None
-            if view is not None and view not in jobs.VIEW_NAMES:
-                raise ValueError(f"{name}: the view must be one of {', '.join(jobs.VIEW_NAMES)}")
+            if view is not None and view not in jobs.VIEW_ANGLES:
+                raise ValueError(f"{name}: the view must be one of {', '.join(jobs.VIEW_ANGLES)}")
             encoded = base64.b64encode(data).decode()
             parts.append({"image": encoded, "view": view, "name": name})
             bodies.append((f"Mesh of {name}",
@@ -366,7 +366,7 @@ def build_bodies(request: dict) -> list[tuple[str, dict]]:
                 raise ValueError(f"{name}: empty, or over {jobs.MAX_IMAGE_BYTES // 2**20} MiB")
             return [(f"Views of {name}",
                      {"kind": "views", "image": base64.b64encode(data).decode(),
-                      "name": jobs.safe_name(Path(name).stem), "params": params})]
+                      "name": jobs.views_name(Path(name).stem), "params": params})]
         prompt = _prompt(request)
         return [(f"Views: {prompt}", {"kind": "views", "prompt": prompt,
                                        "name": jobs.safe_name(prompt), "params": params})]

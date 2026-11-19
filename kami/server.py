@@ -20,7 +20,8 @@ Environment (set by `kami up`):
   KAMI_DINO_MODEL      repo replacing the DINOv3 model TRELLIS.2's pipeline.json names
   KAMI_REMBG_MODEL     repo replacing its background remover (BiRefNet weights)
   KAMI_OFFLOAD         "1": keep the pipeline not in use on the CPU (both on a small GPU)
-  KAMI_MESH_BACKEND    "trellis2" (default) or "hunyuan" (KAMI_MESH_MODEL is a Hunyuan3D-2 repo)
+  KAMI_MESH_BACKEND    "trellis2" (default), "hunyuan" (a Hunyuan3D-2 repo) or "pixal3d"
+                       (TencentARC/Pixal3D: TRELLIS.2 with pixel-aligned conditioning, posed views)
   KAMI_MESH_SUBFOLDER  Hunyuan3D-2: the repo folder of the shape model (-mv: named views)
   KAMI_PAINT_MODEL     Hunyuan3D-2: the repo of Hunyuan3D-Paint (texture)
   KAMI_VIEWS_MODEL     diffusers image-editing repo that turns the camera around a front
@@ -89,6 +90,12 @@ if MESH_BACKEND == "hunyuan":
     # before texturing as in its demo app (Hunyuan3D-Paint unwraps the UVs of all of them)
     MESH_DEFAULTS = {"steps": 50, "octree_resolution": 380, "guidance": 5.0,
                      "decimation_target": 40000, "texture": True}
+elif MESH_BACKEND == "pixal3d":
+    # Pixal3D's inference defaults (1536 cascade); fov: the camera of a single picture in
+    # degrees (Pixal3D estimates it with MoGe-2 for a photo; 20 is its multi-view rig's,
+    # and suits product shots and `kami views` pictures)
+    MESH_DEFAULTS = {"texture_size": 2048, "decimation_target": 500000, "remesh": True,
+                     "resolution": 1536, "fov": 20.0}
 else:
     MESH_DEFAULTS = {"texture_size": 2048, "decimation_target": 500000, "remesh": True,
                      "multiview_mode": "stochastic"}
@@ -100,6 +107,29 @@ HUNYUAN_VIEWS = ("front", "left", "back", "right")
 MAX_VIEWS = 8
 MULTIVIEW_MODES = ("stochastic", "multidiffusion")
 
+# Pixal3D: views are posed by name around its training rig (the camera at azimuth 0 sees
+# the front; at 90 the object faces the picture's left, kami's and Hunyuan3D-2mv's
+# "left"), 20 degrees of fov at 3.12 from the object. The front comes first: every other
+# view is placed relative to it. Unnamed views take the free names in PIXAL_VIEW_ORDER.
+PIXAL_AZIMUTHS = {"front": 0, "front-left": 45, "left": 90, "back-left": 135, "back": 180,
+                  "back-right": 225, "right": 270, "front-right": 315}
+PIXAL_VIEW_ORDER = ("front", "left", "back", "right", "front-left", "back-left",
+                    "back-right", "front-right")
+PIXAL_FOV = 0.3490658503988659            # radians: transforms.json of its example
+PIXAL_DISTANCE = 3.1192049980163574
+PIXAL3D_CODE = "/opt/Pixal3D"             # the -pixal3d image's clone, at a pinned commit
+NAF_CODE = "/opt/NAF"                     # its feature upsampler, pinned, weights included
+# the four image-conditioning extractors of inference.py / inference_mv.py
+PIXAL_COND = {
+    "ss": {"image_size": 512, "grid_resolution": 16},
+    "shape_512": {"image_size": 512, "grid_resolution": 32, "use_naf_upsample": True,
+                  "naf_target_size": 512},
+    "shape_1024": {"image_size": 1024, "grid_resolution": 64, "use_naf_upsample": True,
+                   "naf_target_size": 512},
+    "tex_1024": {"image_size": 1024, "grid_resolution": 64, "use_naf_upsample": True,
+                 "naf_target_size": 1024},
+}
+
 # "views" jobs: an image-editing pipeline with a camera LoRA turns the camera around a
 # front picture. Both LoRAs kami knows (fal's for Qwen-Image-Edit-2511, lovis93's for
 # FLUX.2 [dev]) take "<sks> <azimuth> view <elevation> <distance>".
@@ -110,11 +140,14 @@ VIEWS_DEFAULTS = {"steps": 28 if VIEWS_FAMILY == "flux2" else 40, "guidance": 4.
                   "lora_scale": 0.9, "elevation": "eye-level shot", "distance": "medium shot",
                   "views": ["left", "back", "right"]}
 VIEWS_DEFAULTS.update(json.loads(os.environ.get("KAMI_VIEWS_DEFAULTS") or "{}"))
-# view name -> the LoRA's azimuth (0 front, 90 right side, 180 back, 270 left side)
-VIEW_ANGLES = {"front": "front view", "front-right": "front-right quarter view",
-               "right": "right side view", "back-right": "back-right quarter view",
-               "back": "back view", "back-left": "back-left quarter view",
-               "left": "left side view", "front-left": "front-left quarter view"}
+# view name -> the LoRA's azimuth. kami names views as Hunyuan3D-2mv does, by where the
+# camera goes: "left" = the camera moved to your left, the object facing the picture's
+# left (its example left.png). The LoRAs name the object's side instead: their "left
+# side view" shows the object facing right (seen on views-qwen). So left and right swap.
+VIEW_ANGLES = {"front": "front view", "front-right": "front-left quarter view",
+               "right": "left side view", "back-right": "back-left quarter view",
+               "back": "back view", "back-left": "back-right quarter view",
+               "left": "right side view", "front-left": "front-right quarter view"}
 # the front picture of a concept: what a mesh model wants to see
 FRONT_HINT = ("front view of the whole object, centred, full view, on a plain white "
               "background, soft even studio light")
@@ -125,6 +158,20 @@ def log(msg):
 
 
 # --- pipelines ---
+
+def alias_dino_layers(dino, label="DINOv3"):
+    """transformers 5 moved DINOv3's layers from `model.layer` to `model.model.layer`;
+    TRELLIS.2 and Pixal3D walk `model.layer`. Alias them, outside the module tree."""
+    if dino is None or "layer" in dino.__dict__ or "layer" in getattr(dino, "_modules", {}):
+        return False
+    inner = getattr(dino, "_modules", {}).get("model")
+    layers = getattr(inner, "_modules", {}).get("layer") if inner is not None else None
+    if layers is None:
+        return False
+    object.__setattr__(dino, "layer", layers)
+    log(f"{label}: transformers 5 layout, layers aliased")
+    return True
+
 
 def fit_transformers(pipeline):
     """Bridge TRELLIS.2 and transformers 5. TRELLIS.2's DINOv3 feature extractor walks
@@ -170,7 +217,13 @@ class Pipelines:
         import torch    # noqa: F401  (fail early, with a clear message, without torch)
         os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
         os.environ.setdefault("OPENCV_IO_ENABLE_OPENEXR", "1")
-        if MESH_MODEL and MESH_BACKEND == "hunyuan":
+        if MESH_MODEL and MESH_BACKEND == "pixal3d":
+            started = time.monotonic()
+            log(f"loading Pixal3D {MESH_MODEL} (single view and posed views)")
+            self.mesh = PixalMesh()
+            self.on_gpu = "mesh"
+            log(f"mesh pipeline ready in {time.monotonic() - started:.0f} s")
+        elif MESH_MODEL and MESH_BACKEND == "hunyuan":
             started = time.monotonic()
             log(f"loading Hunyuan3D-2 {MESH_MODEL} ({MESH_SUBFOLDER}) + {PAINT_MODEL} (texture)")
             self.mesh = HunyuanMesh()
@@ -219,6 +272,8 @@ class Pipelines:
             if VIEWS_LORA:
                 repo, weight = lora_parts(VIEWS_LORA)
                 self.views.load_lora_weights(repo, weight_name=weight, adapter_name="views")
+                log(f"views LoRA: {lora_layers(self.views)} layers carry it; adapters "
+                    f"{getattr(self.views, 'get_list_adapters', lambda: '?')()}")
             if OFFLOAD:
                 _to(self.views, "cpu")
             else:
@@ -352,6 +407,94 @@ class HunyuanMesh:
         return self.rembg(image.convert("RGB"))
 
 
+def naf_upsampler(device):
+    """NAF from the image's pinned clone: only its naf.py (src/model/__init__ imports a
+    dozen other upsamplers and their dependencies), with the release weights baked in,
+    instead of the torch.hub.load of valeoai/NAF that Pixal3D does (code fetched on boot)."""
+    import importlib.util
+    import torch
+    if NAF_CODE not in sys.path:
+        sys.path.insert(0, NAF_CODE)          # src/ is a namespace package: src.layers
+    spec = importlib.util.spec_from_file_location("kami_naf", os.path.join(NAF_CODE, "src/model/naf.py"))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    model = module.NAF().to(device)
+    state = torch.load(os.path.join(NAF_CODE, "naf_release.pth"), map_location=device, weights_only=True)
+    model.load_state_dict(state)
+    return model.eval()
+
+
+class PixalMesh:
+    """Pixal3D: one pipeline for single pictures and one for posed views (separate
+    weights in the same repo). Both load at boot onto the CPU; the one a job needs goes
+    to the GPU, the other waits in RAM (each takes ~18 GB on the GPU)."""
+
+    def __init__(self):
+        from pixal3d.trainers.flow_matching.mixins import image_conditioned_proj as proj
+        proj.DinoV3ProjFeatureExtractor._load_naf = _load_naf
+        proj.DinoV3ProjMultiViewFeatureExtractor._load_naf = _load_naf
+        self.pipes = {kind: self._build(kind) for kind in ("single", "mv")}
+        self.on_gpu = None
+        self.use("mv")
+
+    def _build(self, kind):
+        from pixal3d.pipelines import Pixal3DImageTo3DPipeline, Pixal3DMVImageTo3DPipeline
+        from pixal3d.trainers.flow_matching.mixins import image_conditioned_proj as proj
+        if kind == "mv":
+            pipe = Pixal3DMVImageTo3DPipeline.from_pretrained(MESH_MODEL, "pipeline_mv.json")
+            extractor = proj.DinoV3ProjMultiViewFeatureExtractor
+        else:
+            pipe = Pixal3DImageTo3DPipeline.from_pretrained(MESH_MODEL, "pipeline.json")
+            extractor = proj.DinoV3ProjFeatureExtractor
+        dino = DINO_MODEL or "facebook/dinov3-vitl16-pretrain-lvd1689m"
+        for stage_name, config in PIXAL_COND.items():
+            config = dict(config, model_name=dino)
+            if kind == "mv":
+                config["multiview_fusion"] = "average"
+            model = extractor(**config).eval()
+            alias_dino_layers(getattr(model, "model", None), f"Pixal3D {kind} {stage_name}")
+            setattr(pipe, f"image_cond_model_{stage_name}", model)
+        pipe.low_vram = False
+        track_mesh_progress(pipe)
+        return pipe
+
+    def _cond_models(self, pipe):
+        return [getattr(pipe, f"image_cond_model_{name}") for name in PIXAL_COND]
+
+    def use(self, kind):
+        """The pipeline for `kind` ("single" / "mv"), on the GPU."""
+        import torch
+        if self.on_gpu != kind:
+            if self.on_gpu is not None:
+                self._move(self.pipes[self.on_gpu], "cpu")
+                gc.collect()
+                torch.cuda.empty_cache()
+            self._move(self.pipes[kind], "cuda")
+            for model in self._cond_models(self.pipes[kind]):
+                if getattr(model, "use_naf_upsample", False):
+                    model._load_naf()
+            self.on_gpu = kind
+        return self.pipes[kind]
+
+    def _move(self, pipe, device):
+        pipe.to(device)
+        for model in self._cond_models(pipe):
+            model.to(device)
+
+    def to(self, device):                     # OFFLOAD: the whole of it out of the way
+        if self.on_gpu is not None and device == "cpu":
+            self._move(self.pipes[self.on_gpu], "cpu")
+            self.on_gpu = None
+        elif device == "cuda":
+            self.use("mv")
+
+
+def _load_naf(self):
+    """Pixal3D's extractors call this to get their NAF upsampler (see naf_upsampler)."""
+    if self.naf_model is None:
+        self.naf_model = naf_upsampler(next(self.model.parameters()).device)
+
+
 def _to(pipe, device):
     if hasattr(pipe, "to"):
         pipe.to(device)
@@ -402,6 +545,15 @@ def lora_parts(entry):
     """("org/name", "file.safetensors") of a LoRA entry "org/name/file.safetensors"."""
     parts = entry.split("/")
     return "/".join(parts[:2]), "/".join(parts[2:]) or None
+
+
+def lora_layers(pipe):
+    """How many layers of the pipeline's denoiser got LoRA weights (0: the LoRA's keys
+    matched nothing, and it does nothing)."""
+    model = getattr(pipe, "transformer", None) or getattr(pipe, "unet", None)
+    if model is None:
+        return 0
+    return sum(1 for _, module in model.named_modules() if hasattr(module, "lora_A"))
 
 
 def on_white(image):
@@ -499,6 +651,8 @@ def make_mesh(views, params, out_path):
     PIPES.use("mesh")
     if MESH_BACKEND == "hunyuan":
         return make_mesh_hunyuan(views, p, out_path)
+    if MESH_BACKEND == "pixal3d":
+        return make_mesh_pixal3d(views, p, out_path)
     return make_mesh_trellis(views, p, out_path)
 
 
@@ -577,6 +731,111 @@ def make_mesh_trellis(views, p, out_path):
     # PNG textures, not EXT_texture_webp: the image's Pillow (pillow-simd, from TRELLIS.2's
     # setup.sh) cannot encode them as WebP ("unsupported image mode"), and many viewers and
     # slicers do not read WebP textures in a GLB anyway.
+    glb.export(out_path)
+
+
+def pixal_camera(azimuth_degrees):
+    """Pixal3D's camera-to-world matrix (Z-up, the camera looking down its -Z) for a view
+    at that azimuth around the object: its front camera turned about the world's Z."""
+    import math
+    a = math.radians(azimuth_degrees)
+    c, s = math.cos(a), math.sin(a)
+    front = [[1.0, 0.0, 0.0, 0.0], [0.0, 0.0, -1.0, -PIXAL_DISTANCE], [0.0, 1.0, 0.0, 0.0],
+             [0.0, 0.0, 0.0, 1.0]]
+    turn = [[c, -s, 0.0, 0.0], [s, c, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]]
+    return [[sum(turn[i][k] * front[k][j] for k in range(4)) for j in range(4)] for i in range(4)]
+
+
+def same_framing(images, margin=1.1):
+    """RGBA views cropped to squares of one size, each centred on its object: Pixal3D's
+    posed views are used as framed (no crop of its own), and its training renders show
+    the object at one scale in every view. The square is the largest object extent of
+    all the views times `margin`, as its single-view preprocessing frames a picture."""
+    from PIL import Image
+    boxes = []
+    for image in images:
+        mask = image.getchannel("A").point(lambda a: 255 if a > 204 else 0)
+        boxes.append(mask.getbbox() or (0, 0, image.width, image.height))
+    side = int(max(max(r - l, b - t) for l, t, r, b in boxes) * margin) or 1
+    out = []
+    for image, (l, t, r, b) in zip(images, boxes):
+        cx, cy = (l + r) // 2, (t + b) // 2
+        square = Image.new("RGBA", (side, side), (0, 0, 0, 0))
+        square.paste(image, (side // 2 - cx, side // 2 - cy))
+        out.append(square)
+    return out
+
+
+def pixal_cutout(pipe, image):
+    """RGBA with the object cut out (an image already cut out is kept as it is)."""
+    if image.mode == "RGBA":
+        return image
+    return pipe.rembg_model(image.convert("RGB")).convert("RGBA")
+
+
+def pixal_views(pipe, views):
+    """The bundle run_mv takes, out of [(name, PIL)]: front first, then the others."""
+    import numpy as np
+    import torch
+    from PIL import Image
+    order = sorted(views, key=lambda v: PIXAL_VIEW_ORDER.index(v[0]))
+    images = same_framing([pixal_cutout(pipe, image) for _, image in order])
+
+    def cond(image, size):
+        image = image.resize((size, size), Image.Resampling.LANCZOS)
+        alpha = torch.tensor(np.array(image.getchannel("A"))).float() / 255.0
+        rgb = torch.tensor(np.array(image.convert("RGB"))).permute(2, 0, 1).float() / 255.0
+        return rgb * alpha.unsqueeze(0)          # premultiplied: black background
+    count = len(images)
+    return {
+        "images": {size: torch.stack([cond(im, size) for im in images])[None] for size in (512, 1024)},
+        "camera_angle_x": torch.full((1, count), PIXAL_FOV),
+        "camera_distance": torch.full((1, count), PIXAL_DISTANCE),
+        "transform_matrix": torch.tensor([[pixal_camera(PIXAL_AZIMUTHS[n]) for n, _ in order]]),
+        "mesh_scale": 1.0,
+        "view_names": [n for n, _ in order],
+    }
+
+
+def pixal_distance(fov, image_resolution=512, mesh_scale=1.0):
+    """Pixal3D's distance_from_fov (inference.py) for its default framing: the camera
+    distance at which the object fills a picture seen with that horizontal fov."""
+    import math
+    gp_x, gp_y = -1.0 / mesh_scale / 2, 0.0       # grid point (-1, 0, 0), turned and halved
+    f_pixels = (16.0 / math.tan(fov / 2.0)) * image_resolution / 32.0
+    x_ndc = 0 - image_resolution / 2.0
+    return f_pixels * gp_x / x_ndc - gp_y
+
+
+def make_mesh_pixal3d(views, p, out_path):
+    import math
+    import numpy as np
+    import o_voxel
+    seed = int(p["seed"]) if p.get("seed") is not None else 42
+    kwargs = {"seed": seed, "pipeline_type": f"{int(p['resolution'])}_cascade"}
+    if len(views) == 1:
+        pipe = PIPES.mesh.use("single")
+        fov = math.radians(float(p["fov"]))
+        mesh = pipe.run(views[0][1], camera_params={"camera_angle_x": fov, "distance": pixal_distance(fov),
+                                                    "mesh_scale": 1.0}, **kwargs)[0]
+    else:
+        pipe = PIPES.mesh.use("mv")
+        stage("prepare")
+        bundle = pixal_views(pipe, views)
+        log(f"{len(views)} posed views: {', '.join(bundle['view_names'])}")
+        mesh = pipe.run_mv(bundle, **kwargs)[0]
+    if hasattr(mesh, "simplify"):
+        mesh.simplify(NVDIFFRAST_LIMIT)
+    stage("glb")
+    glb = o_voxel.postprocess.to_glb(
+        vertices=mesh.vertices, faces=mesh.faces, attr_volume=mesh.attrs, coords=mesh.coords,
+        attr_layout=mesh.layout, voxel_size=mesh.voxel_size,
+        aabb=[[-0.5, -0.5, -0.5], [0.5, 0.5, 0.5]],
+        decimation_target=int(p["decimation_target"]), texture_size=int(p["texture_size"]),
+        remesh=bool(p["remesh"]), remesh_band=1, remesh_project=0, verbose=False)
+    # Pixal3D's frame (front camera on -Y) to the GLB's, as its inference scripts do
+    glb.apply_transform(np.array([[-1, 0, 0, 0], [0, 0, -1, 0], [0, -1, 0, 0], [0, 0, 0, 1]],
+                                 dtype=np.float64))
     glb.export(out_path)
 
 
@@ -719,7 +978,7 @@ def track_mesh_progress(pipeline):
     # only the samplers: they loop over the bar and nothing else (other code may call the
     # bar's methods, which the generator returned in its place does not have)
     for module in [m for n, m in list(sys.modules.items())
-                   if n.startswith("trellis2.pipelines.samplers") and m]:
+                   if n.startswith(("trellis2.pipelines.samplers", "pixal3d.pipelines.samplers")) and m]:
         orig = getattr(module, "tqdm", None)
         if callable(orig) and not getattr(orig, "kami_tracked", False):
             module.tqdm = tracked_tqdm(orig)
@@ -951,6 +1210,8 @@ def view_limits():
     """(how many views of one object a mesh job may carry, their names or None for any)."""
     if MESH_BACKEND == "hunyuan":
         return (len(HUNYUAN_VIEWS), HUNYUAN_VIEWS) if HUNYUAN_MV else (1, None)
+    if MESH_BACKEND == "pixal3d":
+        return len(PIXAL_VIEW_ORDER), PIXAL_VIEW_ORDER
     return MAX_VIEWS, None
 
 
@@ -996,6 +1257,8 @@ def mesh_views(body):
         for item in views:
             if not item[0]:
                 item[0] = free.pop(0)
+        if MESH_BACKEND == "pixal3d" and len(views) > 1 and "front" not in [v for v, _ in views]:
+            raise ValueError("Pixal3D places every view relative to the front one: name one front")
     return [tuple(v) for v in views]
 
 
@@ -1173,6 +1436,36 @@ class Handler(BaseHTTPRequestHandler):
         self.send(202, job.info())
 
 
+# Packages the pipelines need newer than an older kami-server image has (the image pins
+# them now): upgraded on boot, before anything imports them. Qwen-Image-Edit's text
+# encoder renders its chat template with transformers, which wants jinja2 >= 3.1.6.
+MIN_PACKAGES = {"jinja2": (3, 1, 6)}
+
+
+def _version(text):
+    return tuple(int(part) for part in (text.split(".") + ["0", "0"])[:3] if part.isdigit())
+
+
+def ensure_packages():
+    """pip-upgrade what is older than MIN_PACKAGES; a failure is logged, not fatal."""
+    from importlib import metadata
+    import subprocess
+    for name, least in MIN_PACKAGES.items():
+        try:
+            have = _version(metadata.version(name))
+        except metadata.PackageNotFoundError:
+            have = ()
+        if have >= least:
+            continue
+        wanted = f"{name}>={'.'.join(map(str, least))}"
+        log(f"{name} {'.'.join(map(str, have)) or 'missing'} is too old: installing {wanted}")
+        try:
+            subprocess.run([sys.executable, "-m", "pip", "install", "-q", wanted],
+                           check=True, timeout=300)
+        except Exception as e:
+            log(f"could not install {wanted}: {e}")
+
+
 def main():
     os.makedirs(JOBS_DIR, exist_ok=True)
     if not API_KEY:
@@ -1185,6 +1478,7 @@ def main():
     threading.Thread(target=server.serve_forever, daemon=True).start()
     log(f"listening on :{PORT} (health 503 until the pipelines load)")
     try:
+        ensure_packages()
         PIPES.load()
     except Exception as e:
         PIPES.error = f"{type(e).__name__}: {e}"

@@ -1,0 +1,52 @@
+# kami-server with Pixal3D (TencentARC, MIT, SIGGRAPH 2026): TRELLIS.2 with pixel-aligned
+# conditioning, for single pictures and for posed views of one object (front, left,
+# back, right...). Built on top of the TRELLIS.2 image (docker/Dockerfile), whose
+# o_voxel, flex_gemm, flash_attn and nvdiffrast it uses as they are. Profiles whose
+# mesh_model is TencentARC/Pixal3D set `container` to this image.
+#
+# Build after the base image (the workflow does it with variant = pixal3d):
+#   docker build -f docker/Dockerfile.pixal3d --build-arg BASE=ghcr.io/<you>/kami-server:0.1.0 \
+#     -t ghcr.io/<you>/kami-server:0.1.0-pixal3d docker
+
+ARG BASE=ghcr.io/jtorregrosa/kami-server:0.1.0
+FROM ${BASE}
+
+# fixed commits: the build does not change under kami when upstream moves
+ARG PIXAL3D_REF=f7cf38429b0bd264f1995f0f8743a88b1c728b94
+ARG NAF_REF=37f2dfc180f2de53d98bd601109c0da0dd6b0f43
+RUN git clone https://github.com/TencentARC/Pixal3D.git /opt/Pixal3D \
+ && git -C /opt/Pixal3D checkout "${PIXAL3D_REF}"
+
+# NAF, the feature upsampler of its extractors (valeoai, Apache-2.0): Pixal3D fetches it
+# with torch.hub on every load; here it is pinned, with its release weights, and
+# kami-server loads it from /opt/NAF.
+RUN git clone https://github.com/valeoai/NAF.git /opt/NAF \
+ && git -C /opt/NAF checkout "${NAF_REF}" \
+ && python -c "import urllib.request; urllib.request.urlretrieve('https://github.com/valeoai/NAF/releases/download/model/naf_release.pth', '/opt/NAF/naf_release.pth')"
+
+# What Pixal3D and NAF import that the TRELLIS.2 image lacks, without moving torch,
+# transformers, diffusers or Pillow. natten (NAF's neighbourhood attention): the
+# prebuilt 0.17.5 wheel for this torch 2.6 / CUDA 12.4 / Python 3.11 (NAF takes its
+# na2d_qk / na2d_av API; Pixal3D's README builds 0.21 from source, which has no wheel
+# for torch 2.6). MoGe (camera estimation of free-form photos) is left out: kami gives a
+# single picture a fixed fov.
+RUN pip freeze | grep -iE '^(torch|torchvision|numpy|transformers|diffusers|accelerate|huggingface[-_]hub|safetensors|pillow)==' > /tmp/keep.txt \
+ && pip install -c /tmp/keep.txt \
+        "https://github.com/SHI-Labs/NATTEN/releases/download/v0.17.5/natten-0.17.5%2Btorch260cu124-cp311-cp311-linux_x86_64.whl" \
+        easydict plyfile einops \
+ && rm -f /tmp/keep.txt
+
+ENV PYTHONPATH=/opt/TRELLIS.2:/opt/Pixal3D
+
+# Fail here, not on a billed pod. Pixal3D, like TRELLIS.2, cannot be imported without a
+# GPU (flex_gemm sets up Triton kernels on import), so it is only checked to be there;
+# NAF's model file and weights are.
+RUN python -c "import importlib.util as u, os; \
+missing = [m for m in ('pixal3d', 'natten', 'einops', 'easydict', 'plyfile', 'trellis2', 'o_voxel') if u.find_spec(m) is None]; \
+assert not missing, f'not installed: {missing}'; \
+assert os.path.isfile('/opt/NAF/src/model/naf.py'), 'NAF code missing'; \
+assert os.path.getsize('/opt/NAF/naf_release.pth') > 1000000, 'NAF weights missing'; \
+assert os.path.isfile('/opt/Pixal3D/pixal3d/pipelines/pixal3d_mv_image_to_3d.py'), 'Pixal3D multi-view pipeline missing'; \
+print('pixal3d ready')"
+
+WORKDIR /root

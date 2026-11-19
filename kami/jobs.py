@@ -80,7 +80,7 @@ VIEW_ANGLES = ("front", "front-right", "right", "back-right", "back", "back-left
 def view_arg(text: str) -> tuple[str | None, str]:
     """("front", "a.png") out of "front=a.png"; (None, text) for a plain path."""
     name, sep, path = text.partition("=")
-    if sep and name.strip().lower() in VIEW_NAMES and path:
+    if sep and name.strip().lower() in VIEW_ANGLES and path:
         return name.strip().lower(), path
     return None, text
 
@@ -175,6 +175,16 @@ def free_path(path: Path) -> Path:
     while (candidate := path.with_name(f"{path.stem}-{n}{path.suffix}")).exists():
         n += 1
     return candidate
+
+
+def views_name(front_stem: str) -> str:
+    """The name of a views job started from a front picture: "owl-front" -> "owl", so its
+    views are owl-left.png, not owl-front-left.png (which reads as a front-left view)."""
+    name = safe_name(front_stem)
+    for angle in sorted(VIEW_ANGLES, key=len, reverse=True):
+        if name.endswith(f"-{angle}"):
+            return name[:-len(angle) - 1] or name
+    return name
 
 
 def safe_name(text: str, fallback: str = "kami") -> str:

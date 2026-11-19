@@ -1648,7 +1648,7 @@ def mesh_command(paths: list[Path]) -> str:
         stem = re.sub(r"-\d+$", "", path.stem)          # a-owl-front-2: kept a file there
         view = next((v for v in sorted(jobs.VIEW_ANGLES, key=len, reverse=True)
                      if stem.endswith(f"-{v}")), None)
-        named.append(f"{view}={path}" if view in jobs.VIEW_NAMES else None)
+        named.append(f"{view}={path}" if view else None)
     return "kami mesh " + " ".join(n for n in named if n) if any(named) else ""
 
 
@@ -1670,7 +1670,7 @@ def cmd_views(args, cfg: Config) -> None:
     params = views_params(args)
     angles = params.get("views") or (served.get("views_defaults") or {}).get("views") or []
     body = {"kind": "views", "params": params,
-            "name": jobs.safe_name(args.prompt or Path(args.front).stem)}
+            "name": jobs.safe_name(args.prompt) if args.prompt else jobs.views_name(Path(args.front).stem)}
     if front:
         body["image"] = front
     else:
@@ -1679,7 +1679,8 @@ def cmd_views(args, cfg: Config) -> None:
     saved = run_job(cfg, state, body, label, output_dir(args, cfg))
     command = mesh_command(saved)
     if command:
-        ui.hint(f"`{command}` on a Hunyuan3D-2mv pod (or `kami mesh --views ...` on TRELLIS.2)")
+        ui.hint(f"`{command}` on a Pixal3D pod (`kami up -p pixal3d`), or Hunyuan3D-2mv "
+                "(front, left, back, right only)")
 
 
 RELOAD_TIMEOUT = 15 * 60      # the pipelines load again: a few minutes

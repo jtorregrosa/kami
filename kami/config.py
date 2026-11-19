@@ -183,6 +183,11 @@ class Profile:
             repos = [f"{self.mesh_model}/{self.shape_subfolder}", *image,
                      *(f"{paint}/{folder}" for folder in HUNYUAN_PAINT_FOLDERS),
                      self.rembg_model or REMBG_MODEL]
+        elif self.mesh_backend == "pixal3d":
+            # its own repo holds every stage (single-view and posed-view weights); DINOv3
+            # and RMBG-2.0 as TRELLIS.2's (no TRELLIS-image-large)
+            repos = [self.mesh_model, *image, self.dino_model or DINO_MODEL,
+                     self.rembg_model or REMBG_MODEL]
         elif self.mesh_model:
             repos = [self.mesh_model, *image, self.dino_model or DINO_MODEL,
                      self.rembg_model or REMBG_MODEL, *MESH_DEPENDENCIES]
@@ -223,8 +228,12 @@ def views_family(views_model: str) -> str:
 
 
 def mesh_backend(mesh_model: str) -> str:
-    """Which pipeline a mesh_model runs on: "hunyuan" (Hunyuan3D-2) or "trellis2"."""
-    return "hunyuan" if "hunyuan3d" in mesh_model.lower() else "trellis2"
+    """Which pipeline a mesh_model runs on: "hunyuan" (Hunyuan3D-2), "pixal3d"
+    (TencentARC/Pixal3D) or "trellis2"."""
+    name = mesh_model.lower()
+    if "hunyuan3d" in name:
+        return "hunyuan"
+    return "pixal3d" if "pixal3d" in name else "trellis2"
 
 
 @dataclass
@@ -304,7 +313,8 @@ VIEWS_PARAMS = ("steps", "guidance", "seed", "lora_scale", "elevation", "distanc
 # Both backends: TRELLIS.2 (texture_size, remesh, pipeline_type, multiview_mode) and
 # Hunyuan3D-2 (steps, octree_resolution, guidance, texture); each ignores the others.
 MESH_PARAMS = ("texture_size", "decimation_target", "remesh", "seed", "pipeline_type",
-               "multiview_mode", "steps", "octree_resolution", "guidance", "texture")
+               "multiview_mode", "steps", "octree_resolution", "guidance", "texture",
+               "resolution", "fov")
 
 
 def _kind_ok(value, kind: str) -> bool:

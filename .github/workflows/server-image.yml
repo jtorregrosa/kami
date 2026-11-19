@@ -11,9 +11,9 @@ on:
         description: "Image tag"
         default: "0.1.0"
       variant:
-        description: "base (docker/Dockerfile) or hunyuan (docker/Dockerfile.hunyuan, on top of base:<tag>, tagged <tag>-hunyuan)"
+        description: "base (docker/Dockerfile), or hunyuan / pixal3d (docker/Dockerfile.<variant>, on top of base:<tag>, tagged <tag>-<variant>)"
         type: choice
-        options: [base, hunyuan]
+        options: [base, hunyuan, pixal3d]
         default: base
   push:
     tags: ["server-*"]
@@ -54,12 +54,15 @@ jobs:
       - name: Variant
         id: variant
         run: |
-          if [ "${{ inputs.variant }}" = "hunyuan" ]; then
-            echo "file=docker/Dockerfile.hunyuan" >> "$GITHUB_OUTPUT"
-            echo "suffix=-hunyuan" >> "$GITHUB_OUTPUT"
+          variant="${{ inputs.variant }}"
+          if [ -n "$variant" ] && [ "$variant" != "base" ]; then
+            echo "file=docker/Dockerfile.$variant" >> "$GITHUB_OUTPUT"
+            echo "suffix=-$variant" >> "$GITHUB_OUTPUT"
+            echo "scope=,scope=$variant" >> "$GITHUB_OUTPUT"
           else
             echo "file=docker/Dockerfile" >> "$GITHUB_OUTPUT"
             echo "suffix=" >> "$GITHUB_OUTPUT"
+            echo "scope=" >> "$GITHUB_OUTPUT"
           fi
 
       - uses: docker/setup-buildx-action@v3
@@ -74,12 +77,12 @@ jobs:
         with:
           context: docker
           file: ${{ steps.variant.outputs.file }}
-          # the hunyuan variant builds on the base image of the same tag
+          # the hunyuan and pixal3d variants build on the base image of the same tag
           build-args: BASE=ghcr.io/${{ steps.tag.outputs.owner }}/kami-server:${{ steps.tag.outputs.tag }}
           push: true
           tags: ghcr.io/${{ steps.tag.outputs.owner }}/kami-server:${{ steps.tag.outputs.tag }}${{ steps.variant.outputs.suffix }}
-          # the base keeps the default cache scope (its existing cache); hunyuan has its own
-          cache-from: type=gha${{ inputs.variant == 'hunyuan' && ',scope=hunyuan' || '' }}
+          # the base keeps the default cache scope (its existing cache); each variant has its own
+          cache-from: type=gha${{ steps.variant.outputs.scope }}
           # the image is bigger than the Actions cache: a failed cache export must not
           # fail a build whose image was already pushed
-          cache-to: type=gha,mode=max,ignore-error=true${{ inputs.variant == 'hunyuan' && ',scope=hunyuan' || '' }}
+          cache-to: type=gha,mode=max,ignore-error=true${{ steps.variant.outputs.scope }}

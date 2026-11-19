@@ -2482,6 +2482,14 @@ class MultiView(unittest.TestCase):
                 webui.build_bodies({"kind": "mesh", **bad})
 
 
+def _has_pillow():
+    try:
+        import PIL.Image  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
 class Views(unittest.TestCase):
     """`kami views`: profiles, the pod env, the server's views jobs, the CLI and the page."""
 
@@ -2530,8 +2538,10 @@ gpus = ["H100 PCIe"]
         from kami import server
         p = {"elevation": "eye-level shot", "distance": "medium shot"}
         self.assertEqual(server.view_prompt("back", p), "<sks> back view eye-level shot medium shot")
+        # kami's (Hunyuan3D-2mv's) left is the camera on your left: the LoRAs' right side
+        self.assertEqual(server.view_prompt("left", p), "<sks> right side view eye-level shot medium shot")
         self.assertEqual(server.view_prompt("front-left", p),
-                         "<sks> front-left quarter view eye-level shot medium shot")
+                         "<sks> front-right quarter view eye-level shot medium shot")
         self.assertEqual(tuple(server.VIEW_ANGLES), jobs.VIEW_ANGLES)
         self.assertEqual(server.lora_parts("org/name/dir/l.safetensors"), ("org/name", "dir/l.safetensors"))
 
@@ -2602,10 +2612,21 @@ gpus = ["H100 PCIe"]
         self.assertIn("a ceramic owl, front view", front["prompt"])
         self.assertEqual(calls[0], "lora off")                  # no camera LoRA for the front
         self.assertIn(("scale", 0.9), calls)
-        self.assertEqual(left["prompt"], "<sks> left side view eye-level shot medium shot")
+        self.assertEqual(left["prompt"], "<sks> right side view eye-level shot medium shot")
         self.assertEqual(back["prompt"], "<sks> back view eye-level shot medium shot")
         self.assertEqual((back["width"], back["height"], back["generator"]), (512, 512, ("gen", 7)))
         self.assertEqual(len(left["image"]), 1)
+
+    def test_an_old_jinja2_is_upgraded_on_boot(self):
+        from importlib import metadata
+        from kami import server
+        for have, installs in (("3.1.5", True), ("3.1.6", False), ("3.2", False)):
+            with self.subTest(have=have), mock.patch.object(metadata, "version", return_value=have), \
+                    mock.patch("subprocess.run") as run, mock.patch.object(server, "log"):
+                server.ensure_packages()
+            self.assertEqual(run.called, installs)
+            if installs:
+                self.assertEqual(run.call_args[0][0][-1], "jinja2>=3.1.6")
 
     def test_qwen_edit_is_called_with_true_cfg(self):
         from kami import server
@@ -2625,8 +2646,14 @@ gpus = ["H100 PCIe"]
         saved = [Path("out/owl-front.png"), Path("out/owl-left-2.png"), Path("out/owl-back.png"),
                  Path("out/owl-front-left.png")]
         self.assertEqual(cli.mesh_command(saved),
-                         "kami mesh front=out/owl-front.png left=out/owl-left-2.png back=out/owl-back.png"
-                         .replace("/", os.sep))
+                         ("kami mesh front=out/owl-front.png left=out/owl-left-2.png back=out/owl-back.png "
+                          "front-left=out/owl-front-left.png").replace("/", os.sep))
+
+    def test_a_front_picture_named_front_gives_its_name_without_it(self):
+        self.assertEqual(jobs.views_name("owl-front"), "owl")
+        self.assertEqual(jobs.views_name("Owl_front_left"), "owl")
+        self.assertEqual(jobs.views_name("owl"), "owl")
+        self.assertEqual(jobs.views_name("front"), "front")
 
     def test_the_page_builds_a_views_job(self):
         (label, body), = webui.build_bodies({"kind": "views", "prompt": " an owl ",
@@ -2641,12 +2668,81 @@ gpus = ["H100 PCIe"]
             webui.build_bodies({"kind": "views", "prompt": "x", "angles": ["up"]})
 
 
-def _has_pillow():
-    try:
-        import PIL.Image  # noqa: F401
-        return True
-    except ImportError:
-        return False
+class Pixal3D(unittest.TestCase):
+    """Pixal3D as a mesh backend: its posed cameras, the framing of the views, the
+    profile and what reaches the pod."""
+
+    def test_the_cameras_are_those_of_its_example_rig(self):
+        from kami import server
+        # transforms.json of Pixal3D's assets/mv_images/example (rows, rounded)
+        d = server.PIXAL_DISTANCE
+        example = {0: [[1, 0, 0, 0], [0, 0, -1, -d], [0, 1, 0, 0], [0, 0, 0, 1]],
+                   90: [[0, 0, 1, d], [1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 0, 1]],
+                   180: [[-1, 0, 0, 0], [0, 0, 1, d], [0, 1, 0, 0], [0, 0, 0, 1]],
+                   270: [[0, 0, -1, -d], [-1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 0, 1]]}
+        for azimuth, matrix in example.items():
+            got = server.pixal_camera(azimuth)
+            for row, want in zip(got, matrix):
+                for a, b in zip(row, want):
+                    self.assertAlmostEqual(a, b, places=6, msg=f"azimuth {azimuth}")
+        # kami's left (the object facing the picture's left) is its azimuth 90
+        self.assertEqual(server.PIXAL_AZIMUTHS["left"], 90)
+        self.assertEqual(tuple(sorted(server.PIXAL_VIEW_ORDER)), tuple(sorted(jobs.VIEW_ANGLES)))
+
+    def test_the_distance_matches_its_inference_script(self):
+        import math
+        from kami import server
+        # inference.py's distance_from_fov for fov 0.2 rad, 512 px, mesh_scale 1
+        f_pixels = (16.0 / math.tan(0.1)) * 512 / 32.0
+        self.assertAlmostEqual(server.pixal_distance(0.2), f_pixels * -0.5 / -256.0)
+
+    @unittest.skipUnless(_has_pillow(), "needs Pillow")
+    def test_views_get_one_framing_each_centred_on_its_object(self):
+        from PIL import Image
+        from kami import server
+        wide = Image.new("RGBA", (300, 200), (0, 0, 0, 0))
+        wide.paste((255, 0, 0, 255), (50, 40, 250, 140))      # 200 x 100 object, off centre
+        tall = Image.new("RGBA", (300, 300), (0, 0, 0, 0))
+        tall.paste((0, 255, 0, 255), (140, 20, 180, 170))     # 40 x 150
+        a, b = server.same_framing([wide, tall])
+        self.assertEqual(a.size, b.size)
+        self.assertEqual(a.size, (220, 220))                  # the largest extent x 1.1
+        for square in (a, b):
+            l, t, r, bottom = square.getchannel("A").getbbox()
+            self.assertLessEqual(abs((l + r) / 2 - square.width / 2), 1)
+            self.assertLessEqual(abs((t + bottom) / 2 - square.height / 2), 1)
+
+    def test_posed_views_need_a_front(self):
+        from kami import server
+        png = base64.b64encode(b"png").decode()
+        with mock.patch.multiple(server, MESH_BACKEND="pixal3d"):
+            self.assertEqual(server.view_limits()[0], 8)
+            views = server.mesh_views({"images": [{"image": png}, {"image": png, "view": "back-left"}]})
+            self.assertEqual([v for v, _ in views], ["front", "back-left"])
+            with self.assertRaisesRegex(ValueError, "front"):
+                server.mesh_views({"images": [{"image": png, "view": "left"},
+                                              {"image": png, "view": "back"}]})
+
+    def test_a_pixal3d_profile(self):
+        text = MINIMAL + """
+[profiles.px]
+mesh_model = "TencentARC/Pixal3D"
+gpus = ["RTX 4090"]
+mesh_defaults = { resolution = 1024, fov = 15.0 }
+"""
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "kami.toml"
+            path.write_text(text, encoding="utf-8")
+            cfg = config.load_config(path)
+        p = cfg.profiles["px"]
+        self.assertEqual(p.mesh_backend, "pixal3d")
+        self.assertEqual(p.repos, ["TencentARC/Pixal3D", config.DINO_MODEL, config.REMBG_MODEL])
+        env = pod.server_spec(cfg, p, None, "key")[0]
+        self.assertEqual(env["KAMI_MESH_BACKEND"], "pixal3d")
+
+    def test_the_cli_takes_any_named_view(self):
+        self.assertEqual(jobs.view_arg("back-left=a.png"), ("back-left", "a.png"))
+        self.assertEqual(jobs.view_arg("top=a.png"), (None, "top=a.png"))
 
 
 @unittest.skipUnless(_has_pillow(), "needs Pillow")

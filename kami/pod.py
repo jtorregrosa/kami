@@ -495,6 +495,8 @@ def server_spec(cfg: Config, profile, volume_id: str | None, api_key: str,
         env["KAMI_DINO_MODEL"] = profile.dino_model
     if profile.mesh_model and profile.rembg_model:
         env["KAMI_REMBG_MODEL"] = profile.rembg_model
+    if profile.mesh_model and profile.mesh_backend == "pixal3d":
+        env["KAMI_MESH_BACKEND"] = "pixal3d"
     if profile.mesh_model and profile.mesh_backend == "hunyuan":
         env["KAMI_MESH_BACKEND"] = "hunyuan"
         env["KAMI_MESH_SUBFOLDER"] = profile.shape_subfolder

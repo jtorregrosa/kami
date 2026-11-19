@@ -137,6 +137,12 @@ kami mesh front=a.png left=b.png back=c.png -p hunyuan-mv         # Hunyuan3D-2m
 - **Hunyuan3D-2mv** is trained for it, with named views: `front`, `left`, `back`, `right`
   (`VIEW=IMAGE`; unnamed ones take the free names in that order). Its texture is painted
   from the front view. See the licence note below before using it.
+- **Pixal3D** (`-p pixal3d`, TencentARC, MIT) is TRELLIS.2 with pixel-aligned
+  conditioning and weights trained for posed views: name them by where the camera is
+  (`front`, `left`, `back`, `right`, `front-left`, `back-right`...; one must be `front`,
+  unnamed ones take the free names in that order). The views are cut out and framed
+  alike before it sees them. A single picture works too (`fov` in `mesh_defaults`, 20
+  degrees by default, is the camera it assumes). Runs on the `-pixal3d` image.
 
 ### Views from a concept
 
@@ -161,6 +167,15 @@ Two profiles, to compare which turns the camera better:
 |---|---|---|---|
 | `views-qwen` | Z-Image-Turbo | Qwen-Image-Edit-2511 + fal's Multiple-Angles LoRA (96 poses) | 80 GB |
 | `views-flux` | FLUX.2 [dev] | FLUX.2 [dev] (4-bit) + lovis93's Multi-Angles LoRA v2 (72 poses) | 48 GB |
+
+`views-qwen` is the one that works: on a test concept its four views kept the same
+object (shape, glaze, proportions) and gave it a plausible back, in ~5 minutes on an
+A100. `views-flux` made a finer front, but its camera LoRA barely acts through diffusers
+(left and back came out as the front), so it is kept only to try other LoRAs.
+
+Views are named as Hunyuan3D-2mv names them, by where the camera goes: `left` is the
+picture taken from your left, with the object facing the left of the picture (the
+LoRAs would call it its right side; kami asks them for that).
 
 `--elevation` and `--distance` take the LoRA's own words ("eye-level shot", "high-angle
 shot"; "medium shot", "wide shot"). The view the model invents (the back above all) may
@@ -295,6 +310,8 @@ kami itself is MIT. The models have their own terms. Check them for your use:
   refuses a profile with a Hunyuan3D-2 model until it says `accept_hunyuan_license = true`:
   set it only if the licence covers you. Those profiles run on the `-hunyuan` image
   (`docker/Dockerfile.hunyuan`, the workflow's `variant = hunyuan`).
+- **Pixal3D** (`pixal3d`): MIT; it loads DINOv3 and RMBG-2.0 as TRELLIS.2 does (their
+  terms above), NAF (Apache-2.0) and natten (MIT).
 - **Qwen-Image-Edit-2511** (`views-qwen`): Apache-2.0; fal's Multiple-Angles LoRA:
   Apache-2.0.
 - **FLUX.2 [dev]** (`views-flux`): **FLUX [dev] Non-Commercial License**; lovis93's

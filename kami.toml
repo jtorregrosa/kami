@@ -95,6 +95,20 @@ mesh_defaults = { steps = 50, octree_resolution = 380, guidance = 5.0, decimatio
 extends = "hunyuan"
 mesh_model = "tencent/Hunyuan3D-2mv"
 
+# pixal3d: Pixal3D (TencentARC, MIT, SIGGRAPH 2026), TRELLIS.2 with pixel-aligned
+# conditioning: one picture, or posed views of one object with weights trained for them
+# (`kami mesh front=a.png left=b.png back=c.png right=d.png`, as `kami views` saves
+# them; also front-left, back-right...). ~18 GB on the GPU; its single-view and posed-
+# view pipelines both wait in RAM. Runs on the -pixal3d image (variant = pixal3d).
+[profiles.pixal3d]
+mesh_model = "TencentARC/Pixal3D"
+container = "ghcr.io/jtorregrosa/kami-server:0.1.0-pixal3d"
+gpus = ["RTX 4090", "L40S", "RTX A6000", "L40", "A100 PCIe 80GB"]
+min_vram_gb = 24
+min_ram_gb = 64          # both pipelines in RAM
+disk_gb = 80
+mesh_defaults = { texture_size = 2048, decimation_target = 500000, remesh = true }
+
 # Views of one object from a concept (`kami views "a ceramic owl"`): the front picture
 # first, then a camera LoRA turns the camera around it (left, back, right...), for
 # `kami mesh front=... left=... back=... right=...` on a Hunyuan3D-2mv pod.
@@ -116,6 +130,8 @@ disk_gb = 140
 
 # views-flux: FLUX.2 [dev] makes the front and turns it, with lovis93's Multi-Angles LoRA
 # v2 (72 camera poses, OpenRAIL-M). FLUX.2 [dev] is NON-COMMERCIAL (FLUX [dev] licence).
+# Tried on an L40: a fine front, but the LoRA (all its layers loaded) barely acts through
+# diffusers, even at lora_scale 3: left and back came out as the front. Use views-qwen.
 # The NF4 (4-bit) repo fits a 48 GB card; for full bf16 use
 # views_model = "black-forest-labs/FLUX.2-dev" (gated: accept it on Hugging Face) on an
 # 80 GB card with offload, or more.

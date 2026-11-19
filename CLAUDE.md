@@ -34,7 +34,10 @@ Your PC ── kami mesh photo.png ──HTTPS──► https://<pod>-8000.proxy
   Two mesh backends (`KAMI_MESH_BACKEND`, from `config.mesh_backend(mesh_model)`):
   TRELLIS.2, with several views of one object through `trellis_multiview` (TRELLIS 1's
   tuning-free trick: the samplers' `_inference_model` patched per instance), and
-  Hunyuan3D-2 (`HunyuanMesh`: hy3dgen shape + Hunyuan3D-Paint, -2mv with named views).
+  Hunyuan3D-2 (`HunyuanMesh`: hy3dgen shape + Hunyuan3D-Paint, -2mv with named views),
+  and Pixal3D (`PixalMesh`: single and posed-view pipelines, the one in use on the GPU;
+  views posed by `pixal_camera` from their names, framed alike by `same_framing`; NAF
+  loaded from the image's pinned /opt/NAF instead of torch.hub; `-pixal3d` image).
   Hunyuan profiles need `accept_hunyuan_license` (its licence excludes the EU, UK and
   South Korea) and the `-hunyuan` image (`docker/Dockerfile.hunyuan`, built FROM the base).
   "views" jobs (`views_model`, `KAMI_VIEWS_*`): a front picture (image_model, or FLUX.2
@@ -62,6 +65,7 @@ Your PC ── kami mesh photo.png ──HTTPS──► https://<pod>-8000.proxy
   pod. Host header checked; POSTs need the page's token, JSON and same Origin.
   `cli.WebBackend` gives it the pod status, target and `down`.
 - `kami/watchdog.py`, `kami/ui.py`, `kami/mascot.py` — local guard, console output, mascot.
+- `docker/Dockerfile.pixal3d` — Pixal3D + NAF (pinned) + natten 0.17.5 wheel on top of the base.
 - `docker/Dockerfile` — the kami-server image (torch 2.6 / CUDA 12.4 + TRELLIS.2 + diffusers);
   `.github/workflows/server-image.yml` builds and pushes it to ghcr.io.
 - `tools/convert_dinov3.py` — one-off helper (needs torch, not part of the package): Meta's
@@ -89,9 +93,12 @@ image -> GLB job end to end (PNG textures), `kami reload` (on an L40S). Images g
 `server.open_image` (Pillow; pillow-heif for HEIC; OpenCV if Pillow fails; EXIF turned;
 almost opaque alpha dropped so the background is removed). Not run on a real GPU yet: `offload` moving the
 pipelines between CPU and GPU, Z-Image-Turbo, text-to-mesh, the job
-progress hooks, TRELLIS.2 multiview, `kami views` (neither profile has run: Qwen-Edit /
-FLUX.2 4-bit loading, the LoRAs through diffusers' converters, the azimuth names vs
-Hunyuan3D-2mv's left/right), a whole Hunyuan3D-2 job (the -hunyuan image builds
+progress hooks, TRELLIS.2 multiview, Pixal3D (never run: image unbuilt, NAF with natten 0.17,
+DINOv3 aliasing, the view framing), a Hunyuan3D-2mv mesh from `kami views` pictures
+(left/right: Hunyuan's example left.png faces the picture's left, the LoRAs' "left side
+view" faces right, so VIEW_ANGLES swaps them; untested on an asymmetric object) (`kami views` ran: views-qwen works on an A100, jinja2 upgraded on boot by
+`ensure_packages`; views-flux loads, LoRA on all 170 layers, but it barely changes the
+picture even at lora_scale 3, left/back = the front), a whole Hunyuan3D-2 job (the -hunyuan image builds
 and its pipelines load on a 4090, with `dinov2_v4_checkpoints` and
 `trust_hunyuan_pipelines`; the first jobs failed in pymeshlab, whose plugins needed
 libOpenGL.so.0, now in the image: shape clean-up and Hunyuan3D-Paint never ran), and the guard deleting the pod through GraphQL (the pod-scoped key got 403
