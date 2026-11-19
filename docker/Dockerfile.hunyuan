@@ -1,0 +1,46 @@
+# kami-server with Hunyuan3D-2 too (shape + Hunyuan3D-Paint texture, and Hunyuan3D-2mv's
+# named views), on top of the TRELLIS.2 image (docker/Dockerfile): profiles whose
+# mesh_model is a tencent/Hunyuan3D-2* repo set `container` to this image.
+#
+# Hunyuan3D-2's licence (Tencent Hunyuan Community) does not apply in the European Union,
+# the United Kingdom and South Korea; kami asks for accept_hunyuan_license = true in the
+# profile before it starts such a pod. https://huggingface.co/tencent/Hunyuan3D-2/blob/main/LICENSE
+#
+# Build after the base image (the workflow does it with variant = hunyuan):
+#   docker build -f docker/Dockerfile.hunyuan --build-arg BASE=ghcr.io/<you>/kami-server:0.1.0 \
+#     -t ghcr.io/<you>/kami-server:0.1.0-hunyuan docker
+
+ARG BASE=ghcr.io/jtorregrosa/kami-server:0.1.0
+FROM ${BASE}
+
+# a fixed commit: the build does not change under kami when upstream moves
+ARG HUNYUAN_REF=f8db63096c8282cb27354314d896feba5ba6ff8a
+RUN git clone https://github.com/Tencent/Hunyuan3D-2.git /opt/Hunyuan3D-2 \
+ && git -C /opt/Hunyuan3D-2 checkout "${HUNYUAN_REF}"
+
+# What hy3dgen imports that the TRELLIS.2 image lacks, without moving what TRELLIS.2 and
+# diffusers were installed with (torch, numpy, transformers, diffusers stay as they are).
+# hy3dgen itself goes on PYTHONPATH, not through pip: its install_requires would pull
+# gradio, rembg and onnxruntime, which kami does not use.
+RUN pip freeze | grep -iE '^(torch|torchvision|numpy|transformers|diffusers|accelerate|huggingface[-_]hub|safetensors)==' > /tmp/keep.txt \
+ && pip install -c /tmp/keep.txt scikit-image scipy pymeshlab pygltflib xatlas pybind11 einops pyyaml trimesh \
+ && rm -f /tmp/keep.txt
+
+# Hunyuan3D-Paint's two extensions: a CUDA rasteriser and a C++ mesh inpainter
+WORKDIR /opt/Hunyuan3D-2/hy3dgen/texgen/custom_rasterizer
+RUN pip install --no-build-isolation . && rm -rf build
+WORKDIR /opt/Hunyuan3D-2/hy3dgen/texgen/differentiable_renderer
+RUN python setup.py build_ext --inplace && rm -rf build
+
+ENV PYTHONPATH=/opt/TRELLIS.2:/opt/Hunyuan3D-2
+
+# Fail here, not on a billed pod: everything installed, the inpainter compiled (its .py
+# twin would otherwise be imported in its place, much slower).
+RUN python -c "import importlib.util as u, glob; \
+missing = [m for m in ('hy3dgen', 'custom_rasterizer', 'custom_rasterizer_kernel', 'pymeshlab', 'xatlas', \
+'pygltflib', 'skimage', 'scipy', 'trellis2') if u.find_spec(m) is None]; \
+assert not missing, f'not installed: {missing}'; \
+assert glob.glob('/opt/Hunyuan3D-2/hy3dgen/texgen/differentiable_renderer/mesh_processor*.so'), 'mesh_processor not compiled'; \
+print('hy3dgen ready')"
+
+WORKDIR /root

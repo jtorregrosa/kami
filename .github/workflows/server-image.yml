@@ -10,6 +10,11 @@ on:
       tag:
         description: "Image tag"
         default: "0.1.0"
+      variant:
+        description: "base (docker/Dockerfile) or hunyuan (docker/Dockerfile.hunyuan, on top of base:<tag>, tagged <tag>-hunyuan)"
+        type: choice
+        options: [base, hunyuan]
+        default: base
   push:
     tags: ["server-*"]
 
@@ -19,7 +24,7 @@ permissions:
 
 # one build per tag at a time; a second run of the same tag waits instead of racing
 concurrency:
-  group: server-image-${{ inputs.tag || github.ref_name }}
+  group: server-image-${{ inputs.tag || github.ref_name }}-${{ inputs.variant || 'base' }}
 
 jobs:
   build:
@@ -46,6 +51,17 @@ jobs:
           # registry names must be lower case
           echo "owner=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_OUTPUT"
 
+      - name: Variant
+        id: variant
+        run: |
+          if [ "${{ inputs.variant }}" = "hunyuan" ]; then
+            echo "file=docker/Dockerfile.hunyuan" >> "$GITHUB_OUTPUT"
+            echo "suffix=-hunyuan" >> "$GITHUB_OUTPUT"
+          else
+            echo "file=docker/Dockerfile" >> "$GITHUB_OUTPUT"
+            echo "suffix=" >> "$GITHUB_OUTPUT"
+          fi
+
       - uses: docker/setup-buildx-action@v3
 
       - uses: docker/login-action@v3
@@ -57,9 +73,13 @@ jobs:
       - uses: docker/build-push-action@v6
         with:
           context: docker
+          file: ${{ steps.variant.outputs.file }}
+          # the hunyuan variant builds on the base image of the same tag
+          build-args: BASE=ghcr.io/${{ steps.tag.outputs.owner }}/kami-server:${{ steps.tag.outputs.tag }}
           push: true
-          tags: ghcr.io/${{ steps.tag.outputs.owner }}/kami-server:${{ steps.tag.outputs.tag }}
-          cache-from: type=gha
+          tags: ghcr.io/${{ steps.tag.outputs.owner }}/kami-server:${{ steps.tag.outputs.tag }}${{ steps.variant.outputs.suffix }}
+          # the base keeps the default cache scope (its existing cache); hunyuan has its own
+          cache-from: type=gha${{ inputs.variant == 'hunyuan' && ',scope=hunyuan' || '' }}
           # the image is bigger than the Actions cache: a failed cache export must not
           # fail a build whose image was already pushed
-          cache-to: type=gha,mode=max,ignore-error=true
+          cache-to: type=gha,mode=max,ignore-error=true${{ inputs.variant == 'hunyuan' && ',scope=hunyuan' || '' }}
