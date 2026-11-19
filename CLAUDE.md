@@ -45,6 +45,8 @@ Your PC ── kami mesh photo.png ──HTTPS──► https://<pod>-8000.proxy
 - `kami/watchdog.py`, `kami/ui.py`, `kami/mascot.py` — local guard, console output, mascot.
 - `docker/Dockerfile` — the kami-server image (torch 2.6 / CUDA 12.4 + TRELLIS.2 + diffusers);
   `.github/workflows/server-image.yml` builds and pushes it to ghcr.io.
+- `tools/convert_dinov3.py` — one-off helper (needs torch, not part of the package): Meta's
+  DINOv3 `.pth` → transformers format → a private HF repo, for `dino_model`.
 - `tests/` — `python -m unittest`.
 
 ## Conventions
@@ -64,7 +66,8 @@ Your PC ── kami mesh photo.png ──HTTPS──► https://<pod>-8000.proxy
 
 The client side is unit-tested with mocks. These parts have not run on a real GPU yet:
 the Docker build, TRELLIS.2's `pipeline.run` / `o_voxel.postprocess.to_glb` arguments in
-`server.py`, and `offload` moving the pipelines between CPU and GPU. Check them on the
+`server.py`, `dino_model` / `rembg_model` swapping TRELLIS.2's sub-models
+(`override_model`), and `offload` moving the pipelines between CPU and GPU. Check them on the
 first real pod (`kami up --keep-on-failure`, `kami logs`).
 
 ## Working notes

@@ -166,9 +166,24 @@ image_defaults = { steps = 8, guidance = 0.0, width = 1024, height = 1024 }
 ```
 
 Other keys: `extends` (inherit a profile and override keys), `offload` (keep the model not
-in use on the CPU), `extra_models` (more repos to check access to), `gpu_count`,
+in use on the CPU), `dino_model` / `rembg_model` (replace the DINOv3 model or the
+background remover TRELLIS.2 loads, see below), `extra_models` (more repos to check access to), `gpu_count`,
 `container` (a per-profile image), `min_cuda`. `kami.toml` is checked as a whole: a typo
 is reported with a suggestion before anything is created.
+
+**DINOv3 from Meta's download instead of Hugging Face.** If Meta approved your DINOv3
+request by email (direct `.pth` links) but Hugging Face's gated repo is not open to you,
+convert the ViT-L checkpoint once and keep it in a private Hugging Face repo of your own
+with [`tools/convert_dinov3.py`](tools/convert_dinov3.py) (CPU, needs torch; it checks the
+result against Meta's reference outputs). Then:
+
+```toml
+[profiles.mesh]
+dino_model = "<you>/dinov3-vitl16"       # your private repo; HF_TOKEN must read it
+```
+
+`rembg_model` works the same way for the background remover, e.g.
+`"ZhengPeng7/BiRefNet"` (MIT, not gated) instead of RMBG-2.0.
 
 Any diffusers pipeline works as `image_model` if the image has what it needs. FLUX.1-schnell
 (Apache-2.0) wants a 48 GB card or `offload`. Gated models such as FLUX.1-dev need their

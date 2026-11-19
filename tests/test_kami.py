@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 import zlib
+import types
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -98,10 +99,18 @@ offload = true
         cfg = config.load_config()
         repos = cfg.profiles["studio"].repos
         self.assertEqual(repos[:2], ["org/mesh", "org/image"])
-        for dep in config.MESH_DEPENDENCIES:
+        for dep in (config.DINO_MODEL, config.REMBG_MODEL, *config.MESH_DEPENDENCIES):
             self.assertEqual(repos.count(dep), 1)
         image_only = config.Profile("i", ["G"], image_model="org/image")
         self.assertEqual(image_only.repos, ["org/image"])
+
+    def test_replaced_sub_models_are_checked_instead(self):
+        p = config.Profile("m", ["G"], mesh_model="org/mesh", dino_model="me/dinov3",
+                           rembg_model="ZhengPeng7/BiRefNet")
+        self.assertIn("me/dinov3", p.repos)
+        self.assertIn("ZhengPeng7/BiRefNet", p.repos)
+        self.assertNotIn(config.DINO_MODEL, p.repos)
+        self.assertNotIn(config.REMBG_MODEL, p.repos)
 
     def test_guard_defaults(self):
         cfg = config.load_config()
@@ -183,6 +192,15 @@ class PodBody(ProjectTestCase):
         self.assertNotIn("KAMI_MESH_DEFAULTS", env)
         self.assertEqual(env["KAMI_OFFLOAD"], "1")
         self.assertEqual(pod.pod_body(cfg, p, "GPU A", None, "k")["image"], "my/image:1")
+        self.assertNotIn("KAMI_DINO_MODEL", env)
+
+    def test_replaced_sub_models_reach_the_server(self):
+        cfg = config.load_config()
+        p = config.Profile("m", ["GPU A"], mesh_model="org/mesh", dino_model="me/dinov3",
+                           rembg_model="me/birefnet")
+        env = pod.pod_body(cfg, p, "GPU A", None, "k")["env"]
+        self.assertEqual((env["KAMI_DINO_MODEL"], env["KAMI_REMBG_MODEL"]),
+                         ("me/dinov3", "me/birefnet"))
 
     def test_guard_limits_and_watch(self):
         body = self.body()
@@ -1099,6 +1117,16 @@ class Server(unittest.TestCase):
                             ({"kind": "text-to-mesh", "prompt": "x"}, "no image model")):
             with self.assertRaisesRegex(ValueError, error):
                 self.server.submit(body)
+
+    def test_override_model_swaps_the_repo(self):
+        class Extractor:
+            def __init__(self, model_name, image_size=512):
+                self.model_name, self.image_size = model_name, image_size
+        module = types.SimpleNamespace(DinoV3FeatureExtractor=Extractor)
+        self.server.override_model(module, "DinoV3FeatureExtractor", "me/dinov3")
+        made = getattr(module, "DinoV3FeatureExtractor")(model_name="facebook/x", image_size=256)
+        self.assertEqual((made.model_name, made.image_size), ("me/dinov3", 256))
+        self.server.override_model(module, "Missing", "me/x")       # logged, no error
 
     def test_the_guard_reads_the_servers_metrics(self):
         # the names the guard watches are the ones the server publishes

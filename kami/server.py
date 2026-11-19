@@ -17,6 +17,8 @@ Environment (set by `kami up`):
   KAMI_IMAGE_MODEL     Hugging Face repo of a diffusers pipeline ("" = no images)
   KAMI_IMAGE_DEFAULTS  JSON of default image parameters (steps, guidance, width, height)
   KAMI_MESH_DEFAULTS   JSON of default mesh parameters (texture_size, decimation_target...)
+  KAMI_DINO_MODEL      repo replacing the DINOv3 model TRELLIS.2's pipeline.json names
+  KAMI_REMBG_MODEL     repo replacing its background remover (BiRefNet weights)
   KAMI_OFFLOAD         "1": keep the pipeline not in use on the CPU (both on a small GPU)
 
 Endpoints:
@@ -50,6 +52,8 @@ API_KEY = os.environ.get("KAMI_API_KEY", "")
 MESH_MODEL = os.environ.get("KAMI_MESH_MODEL", "")
 IMAGE_MODEL = os.environ.get("KAMI_IMAGE_MODEL", "")
 OFFLOAD = os.environ.get("KAMI_OFFLOAD") == "1"
+DINO_MODEL = os.environ.get("KAMI_DINO_MODEL", "")
+REMBG_MODEL = os.environ.get("KAMI_REMBG_MODEL", "")
 JOBS_DIR = os.environ.get("KAMI_JOBS_DIR", "/tmp/kami-jobs")
 MAX_JOBS = 50                   # finished jobs kept (with their files); older ones are dropped
 MAX_UPLOAD = 64 * 1024 * 1024   # bytes of a request body
@@ -66,6 +70,21 @@ def log(msg):
 
 
 # --- pipelines ---
+
+def override_model(module, name, repo):
+    """Make `module.<name>(model_name=...)` load `repo` instead. TRELLIS.2 builds its
+    sub-models with getattr(module, name)(**pipeline.json args), so this swaps the weights
+    a pipeline.json names without editing it."""
+    cls = getattr(module, name, None)
+    if cls is None:
+        log(f"cannot replace {name}: TRELLIS.2 has no such class (left as it is)")
+        return
+    def make(*args, **kwargs):
+        kwargs["model_name"] = repo
+        return cls(*args, **kwargs)
+    setattr(module, name, make)
+    log(f"{name} loads {repo}")
+
 
 class Pipelines:
     """The loaded models. With OFFLOAD, the one not in use waits on the CPU."""
@@ -85,6 +104,12 @@ class Pipelines:
             started = time.monotonic()
             log(f"loading mesh pipeline {MESH_MODEL}")
             from trellis2.pipelines import Trellis2ImageTo3DPipeline
+            if DINO_MODEL:
+                from trellis2.modules import image_feature_extractor
+                override_model(image_feature_extractor, "DinoV3FeatureExtractor", DINO_MODEL)
+            if REMBG_MODEL:
+                from trellis2.pipelines import rembg
+                override_model(rembg, "BiRefNet", REMBG_MODEL)
             self.mesh = Trellis2ImageTo3DPipeline.from_pretrained(MESH_MODEL)
             if OFFLOAD:
                 _to(self.mesh, "cpu")

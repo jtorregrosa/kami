@@ -483,6 +483,10 @@ def server_spec(cfg: Config, profile, volume_id: str | None, api_key: str,
         env["KAMI_MESH_DEFAULTS"] = json.dumps(profile.mesh_defaults)
     if profile.offload:
         env["KAMI_OFFLOAD"] = "1"
+    if profile.mesh_model and profile.dino_model:
+        env["KAMI_DINO_MODEL"] = profile.dino_model
+    if profile.mesh_model and profile.rembg_model:
+        env["KAMI_REMBG_MODEL"] = profile.rembg_model
     if volume_id:
         # torch.compile / kernel caches survive on the volume between pods
         env["TORCH_HOME"] = f"{VOLUME_MOUNT}/torch"

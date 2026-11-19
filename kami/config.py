@@ -119,6 +119,11 @@ class Profile:
     # Other repos the pipelines download on load (gated ones must be accepted first);
     # TRELLIS.2's are added by default, see MESH_DEPENDENCIES.
     extra_models: list[str] = field(default_factory=list)
+    # Replace the sub-models TRELLIS.2's pipeline.json names (a Hugging Face repo, in the
+    # transformers format): the image conditioning model (DINOv3) and the background
+    # remover. Empty = the pipeline's own (DINO_MODEL, REMBG_MODEL).
+    dino_model: str = ""
+    rembg_model: str = ""
     # Defaults for the jobs (the server's own when empty): see server.py.
     image_defaults: dict = field(default_factory=dict)
     mesh_defaults: dict = field(default_factory=dict)
@@ -144,14 +149,17 @@ class Profile:
         """Every Hugging Face repo the pod downloads on boot."""
         repos = [m for m in (self.mesh_model, self.image_model) if m]
         if self.mesh_model:
-            repos += [d for d in MESH_DEPENDENCIES if d not in self.extra_models]
-        return [*repos, *self.extra_models]
+            repos += [self.dino_model or DINO_MODEL, self.rembg_model or REMBG_MODEL,
+                      *MESH_DEPENDENCIES]
+        return list(dict.fromkeys([*repos, *self.extra_models]))
 
 
 # Repos the TRELLIS.2 pipeline loads besides its own (its pipeline.json): the image
-# conditioning model and the background remover are gated on Hugging Face.
-MESH_DEPENDENCIES = ("facebook/dinov3-vitl16-pretrain-lvd1689m", "briaai/RMBG-2.0",
-                     "microsoft/TRELLIS-image-large")
+# conditioning model and the background remover are gated on Hugging Face; a profile can
+# replace them (dino_model, rembg_model).
+DINO_MODEL = "facebook/dinov3-vitl16-pretrain-lvd1689m"
+REMBG_MODEL = "briaai/RMBG-2.0"
+MESH_DEPENDENCIES = ("microsoft/TRELLIS-image-large",)
 
 
 @dataclass
@@ -208,6 +216,7 @@ DEFAULT_KEYS = {
 
 PROFILE_KEYS = {
     "extends": TEXT, "mesh_model": TEXT, "image_model": TEXT, "extra_models": NAMES,
+    "dino_model": TEXT, "rembg_model": TEXT,
     "image_defaults": TABLE, "mesh_defaults": TABLE, "offload": BOOL, "gpus": NAMES,
     "disk_gb": INT, "gpu_count": INT, "min_vram_gb": INT, "container": TEXT,
     "min_cuda": VERSION,
@@ -357,6 +366,8 @@ def load_config(path: Path | None = None) -> Config:
                                  mesh_model=p.get("mesh_model", ""),
                                  image_model=p.get("image_model", ""),
                                  extra_models=list(p.get("extra_models", [])),
+                                 dino_model=p.get("dino_model", ""),
+                                 rembg_model=p.get("rembg_model", ""),
                                  image_defaults=dict(p.get("image_defaults", {})),
                                  mesh_defaults=dict(p.get("mesh_defaults", {})),
                                  offload=bool(p.get("offload", False)),
