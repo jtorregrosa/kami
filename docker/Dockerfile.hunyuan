@@ -18,6 +18,13 @@ ARG HUNYUAN_REF=f8db63096c8282cb27354314d896feba5ba6ff8a
 RUN git clone https://github.com/Tencent/Hunyuan3D-2.git /opt/Hunyuan3D-2 \
  && git -C /opt/Hunyuan3D-2 checkout "${HUNYUAN_REF}"
 
+# pymeshlab's plugins (its PLY reader, the decimation hy3dgen's FaceReducer uses) link
+# libOpenGL.so.0: without it they do not load and every Hunyuan mesh fails with
+# "Unknown format for load: ply".
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends libopengl0 \
+ && rm -rf /var/lib/apt/lists/*
+
 # What hy3dgen imports that the TRELLIS.2 image lacks, without moving what TRELLIS.2 and
 # diffusers were installed with (torch, numpy, transformers, diffusers stay as they are).
 # hy3dgen itself goes on PYTHONPATH, not through pip: its install_requires would pull
@@ -42,5 +49,19 @@ missing = [m for m in ('hy3dgen', 'custom_rasterizer', 'custom_rasterizer_kernel
 assert not missing, f'not installed: {missing}'; \
 assert glob.glob('/opt/Hunyuan3D-2/hy3dgen/texgen/differentiable_renderer/mesh_processor*.so'), 'mesh_processor not compiled'; \
 print('hy3dgen ready')"
+
+# and hy3dgen's mesh clean-up can run (pymeshlab's plugins load): a sphere through the
+# PLY round trip and the filters of its FloaterRemover and FaceReducer (hy3dgen itself is
+# not imported: no GPU on the build machine)
+RUN cd /tmp && python -c "import trimesh, pymeshlab; \
+trimesh.creation.icosphere(subdivisions=4).export('s.ply'); \
+ms = pymeshlab.MeshSet(); ms.load_new_mesh('s.ply'); \
+ms.apply_filter('compute_selection_by_small_disconnected_components_per_face', nbfaceratio=0.005); \
+ms.apply_filter('compute_selection_transfer_face_to_vertex', inclusive=False); \
+ms.apply_filter('meshing_remove_selected_vertices_and_faces'); \
+ms.apply_filter('meshing_decimation_quadric_edge_collapse', targetfacenum=500, qualitythr=1.0, \
+preserveboundary=True, boundaryweight=3, preservenormal=True, preservetopology=True, autoclean=True); \
+ms.save_current_mesh('out.ply'); n = ms.current_mesh().face_number(); \
+assert 0 < n <= 500, n; print('pymeshlab clean-up ok:', n, 'faces')" && rm -f /tmp/s.ply /tmp/out.ply
 
 WORKDIR /root
