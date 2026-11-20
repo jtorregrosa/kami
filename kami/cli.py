@@ -1557,17 +1557,44 @@ def print_prompt(args, cfg: Config) -> str:
     colors = getattr(args, "colors", None)
     if colors is not None and not 1 <= colors <= jobs.MAX_PRINT_COLORS:
         raise ConfigError(f"--colors goes from 1 to {jobs.MAX_PRINT_COLORS}")
-    hint = jobs.PRINT_HINT if cfg.print_hint is None else cfg.print_hint
+    preset = getattr(args, "preset", None)
+    # a preset asked for here wins over a hint written in kami.toml
+    hint = jobs.print_hint(None if preset else cfg.print_hint, preset or cfg.print_preset)
     sent = jobs.printable(args.prompt, hint, colors)
+    taken_away = jobs.negations(args.prompt)
+    if taken_away:
+        ui.warn(f"\"{', '.join(taken_away)}\" in the prompt: {jobs.NEGATION_ADVICE}")
     if sent != args.prompt:
-        ui.hint("Prompt sent with the printing hint (flat base, one piece, "
-                f"{colors or jobs.PRINT_COLORS} flat colours, matte): `--as-written` sends it bare")
+        name = preset_in_force(args, cfg)
+        what = f"the `{name}` printing preset" if name else "kami.toml's printing hint"
+        ui.hint(f"Prompt sent with {what}: `--preset NAME` picks another, `--as-written` sends it bare")
     return sent
+
+
+def preset_in_force(args, cfg: Config) -> str | None:
+    """The print preset a command's prompt gets, or None (as written, or kami.toml's own text)."""
+    if getattr(args, "as_written", False):
+        return None
+    preset = getattr(args, "preset", None)
+    return preset or (None if cfg.print_hint is not None else cfg.print_preset or jobs.PRINT_PRESET)
+
+
+def with_negative(params: dict, args, cfg: Config) -> dict:
+    """Image params with the preset's negative prompt, unless --negative gave one. Read by
+    models that run with guidance (Z-Image); the others ignore it."""
+    unwanted = jobs.preset_negative(preset_in_force(args, cfg))
+    if unwanted and not params.get("negative"):
+        params["negative"] = unwanted
+    return params
 
 
 def add_print_options(p) -> None:
     p.add_argument("--colors", type=int, metavar="N",
                    help=f"filament colours the printing hint asks for (default: {jobs.PRINT_COLORS})")
+    p.add_argument("--preset", choices=tuple(jobs.PRINT_PRESETS), metavar="NAME",
+                   help="the kind of print the hint asks for: " + ", ".join(
+                       f"{name} ({label.lower()})" for name, (label, *_) in jobs.PRINT_PRESETS.items())
+                   + f" (default: {jobs.PRINT_PRESET})")
     p.add_argument("--as-written", action="store_true",
                    help="send the prompt as written, without the printing hint")
 
@@ -1622,7 +1649,7 @@ def cmd_mesh(args, cfg: Config) -> None:
                               "has none\nUse a profile with both (e.g. `studio`), or give an image.")
         body = {"kind": "text-to-mesh", "prompt": print_prompt(args, cfg),
                 "name": jobs.safe_name(args.prompt),
-                "params": {"image": image_params(args), "mesh": mesh_params(args)}}
+                "params": {"image": with_negative(image_params(args), args, cfg), "mesh": mesh_params(args)}}
         run_job(cfg, state, body, "Prompt -> image -> mesh", out)
         return
     for i, (path, image) in enumerate(zip(paths, encoded), 1):
@@ -1644,7 +1671,7 @@ def cmd_image(args, cfg: Config) -> None:
     base_seed = args.seed
     prompt = print_prompt(args, cfg)
     for i in range(args.count):
-        params = image_params(args)
+        params = with_negative(image_params(args), args, cfg)
         if base_seed is not None:
             params["seed"] = base_seed + i
         label = f"Image {i + 1}/{args.count}" if args.count > 1 else "Image"
@@ -1698,6 +1725,12 @@ def cmd_views(args, cfg: Config) -> None:
         body["image"] = front
     else:
         body["prompt"] = print_prompt(args, cfg)
+        how = jobs.preset_front(preset_in_force(args, cfg))
+        if how:                           # a pod older than front_hint ignores it
+            params["front_hint"] = how
+        front_params = with_negative({}, args, cfg)        # for the picture the pod makes first
+        if front_params:
+            params["image"] = front_params
     label = f"Views ({', '.join(['front', *[a for a in angles if a != 'front']])})"
     saved = run_job(cfg, state, body, label, output_dir(args, cfg))
     command = mesh_command(saved)
@@ -1894,7 +1927,9 @@ class WebBackend:
         self.cfg = cfg
         self.served: dict[str, dict] = {}       # pod id -> what it serves (/v1/info)
         # what the page's prompts get added (the page can ask for none, or other colours)
-        self.print_hint = jobs.PRINT_HINT if cfg.print_hint is None else cfg.print_hint
+        self.print_hint = jobs.print_hint(cfg.print_hint, cfg.print_preset)
+        # the preset that hint is, or None when kami.toml writes its own
+        self.print_preset = None if cfg.print_hint is not None else cfg.print_preset or jobs.PRINT_PRESET
 
     def status(self) -> dict:
         state = load_state()
@@ -1910,7 +1945,9 @@ class WebBackend:
             served = self.served.get(pod["id"])
         if pod:
             pod = {k: v for k, v in pod.items() if k != "url"}
-        profiles = [{"name": name, "concept": bool(p.image_model or p.views_model),
+        # which stage of the page each profile serves: pictures from text, the camera turned, meshes
+        profiles = [{"name": name, "concept": bool(p.image_model or (p.views_model and
+                                                    config.views_family(p.views_model) == "flux2")),
                      "views": bool(p.views_model), "mesh": bool(p.mesh_model)}
                     for name, p in self.cfg.profiles.items()]
         return {"pod": pod, "ready": info["ready"], "waiting": info["waiting"], "profiles": profiles,

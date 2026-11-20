@@ -186,11 +186,13 @@ LoRAs would call it its right side; kami asks them for that).
 shot"; "medium shot", "wide shot"). The view the model invents (the back above all) may
 not match the front: look at them before making the mesh.
 
-**`kami ui`** does all of this from a web page on your PC, in three stages:
+**`kami ui`** does all of this from a web page on your PC, in four stages:
 
-- **Concept**: a description (or a picture of the front) becomes the views of one object.
-  With a pod that also makes images, "Try fronts" gives quick candidates to pick from;
-  each view can be made again on its own.
+- **Concept**: a description becomes pictures of the object's front, a few at a time to
+  pick from ("Straight to views" skips the picking).
+- **Views**: a picture of the front becomes the object seen from its sides. The picture is
+  the one on the stage, or one of your own from anywhere: drop it, paste it or choose it.
+  Each view can be made again on its own.
 - **Mesh**: the views go into slots named after the side they show (or one mesh per
   picture, or straight from text), with the options of the pod's mesh model, and the
   result opens in an interactive 3D viewer.
@@ -198,10 +200,20 @@ not match the front: look at them before making the mesh.
   the colours of your own; changing colours redraws at once. It runs on your PC, so it
   works with no pod.
 
-The page opens on the stage the active pod serves (a `views` pod on Concept, a
+The page opens on the first stage the active pod serves (a `views` pod on Concept, a
 `mesh` pod on Mesh, no pod on Print), and the header says what the pod is, what it
 costs, how much it has cost and when the guard deletes it. A stage the pod does not
 serve says which `kami up -p ...` gets you there; the page never starts a pod itself.
+Each stage keeps its form short and has a **Settings** button (the gear beside its
+title) that opens a dialog with the rest, in sections, every setting with an (i) that
+explains it. Concept's has the texts kami adds to your description (the printing hint and
+the words that ask for a front picture), both to rewrite, with the prompt exactly as the
+pod will get it, and every parameter of each model (steps, guidance, size, negative
+prompt; the camera LoRA's weight, height and distance) with the pod's defaults shown.
+Print's has the rest of `kami print` (rebuild, detail, border clean-up, smallest patch,
+keeping the surfaces inside). The page remembers how you left it, in the browser; "Back
+to the defaults" forgets it.
+
 Below, the jobs on the pod (stage and progress, the queue, also those sent from a
 terminal) and the **library**: everything in `output_dir` and the folders directly inside
 it, grouped by object, so `owl-front.png`, `owl-left.png`, `owl-front.glb` and
@@ -224,7 +236,29 @@ nothing loose, a few flat colours in clearly separated areas, matte and evenly l
 highlight painted into the texture would become a filament). `--colors N` says how many
 colours it asks for (4, as `kami print`), `--as-written` sends your prompt alone, and
 `print_hint` in `kami.toml` replaces the hint (`{colors}` is the number) or, as `""`,
-turns it off. A picture you bring yourself (`kami mesh photo.png`, `kami views --front`)
+turns it off.
+
+That hint is a **preset**, one per kind of print; `--preset NAME` picks it for a command,
+`print_preset` in `kami.toml` for all of them, and `kami ui` has them in a list:
+
+| Preset | The picture it asks for |
+|---|---|
+| `figure` (default) | A stylised figurine, simplified but true to its subject, standing on its own wide flat base |
+| `flexi` | A stylised animal lying on its belly directly on the ground, body in a straight line and head down: for flexible joints cut into the mesh afterwards. It names no base and no joints, so none are drawn |
+| `lowpoly` | A faceted sculpture on a flat base: large flat triangles, one colour each |
+| `bust` | Head and shoulders, cut straight across the chest into a flat base |
+| `relief` | The subject in raised relief on a thick flat-backed medallion, one colour per level |
+| `natural` | The object as it is, in one piece: only matte and evenly lit, with no limit of colours |
+
+None of them counts colours: the picture keeps the subject's own, and `kami print`
+reduces them to your filaments afterwards (counted in a prompt, they came out as blocks).
+They say what is wanted, never what is not: naming a thing in a prompt ("no base")
+tends to draw it. What is not wanted goes in the preset's negative prompt instead (shown
+in `kami ui`'s settings; `--negative` on a command), which a model running with guidance
+reads. The same goes for your own
+description: "a caterpillar without antennae" comes out with antennae, and kami warns
+when a prompt has a "no", "not" or "without" in it. Say what you want in its place ("a
+caterpillar with a smooth round head"). A picture you bring yourself (`kami mesh photo.png`, `kami views --front`)
 is used as it is. The model follows the hint as far as it follows any prompt.
 
 A mesh from `kami mesh` is made to be looked at: a paper-thin double shell (the surface,
@@ -289,10 +323,10 @@ some MB.
 | `kami up [-p PROFILE]` | Create the pod and wait until the models are loaded (`--budget`, `--max-hours`, `--idle`) |
 | `kami mesh IMAGE...` | Image(s) → textured GLB (`--seed`, `--texture-size`, `--decimation-target`, `--no-remesh`; `--views` for one mesh from several views, `--view-mode`) |
 | `kami mesh --prompt TEXT` | Text → image → GLB (needs a profile with both models) |
-| `kami image PROMPT` | Text → PNG, with the printing hint (`-n`, `--seed`, `--steps`, `--guidance`, `--width`, `--height`, `--colors`, `--as-written`) |
-| `kami views CONCEPT` | Concept → front, left, back, right pictures of it, for `kami mesh` with views (`--front IMAGE`, `--angles`, `--seed`, `--steps`, `--guidance`, `--lora-scale`, `--elevation`, `--distance`, `--colors`, `--as-written`) |
+| `kami image PROMPT` | Text → PNG, with the printing hint (`-n`, `--seed`, `--steps`, `--guidance`, `--width`, `--height`, `--preset`, `--colors`, `--as-written`) |
+| `kami views CONCEPT` | Concept → front, left, back, right pictures of it, for `kami mesh` with views (`--front IMAGE`, `--angles`, `--seed`, `--steps`, `--guidance`, `--lora-scale`, `--elevation`, `--distance`, `--preset`, `--colors`, `--as-written`) |
 | `kami print MESH...` | GLB → 3MF to print in colours, on this PC: closed solid, flat base, mm, the texture as a few filaments (`--height`, `--base`, `--colors`, `--palette`, `--rebuild`, `--detail`, `--smooth`, `--min-patch`, `--keep-cavities`, `-o`) |
-| `kami ui [FOLDER]` | Web page on this PC: Concept → Mesh → Print, opening on what the pod serves; the library by object (`--port`, `--no-browser`) |
+| `kami ui [FOLDER]` | Web page on this PC: Concept → Views → Mesh → Print, opening on what the pod serves; the library by object (`--port`, `--no-browser`) |
 | `kami jobs` | The pod's jobs, whoever sent them: stage and progress of the running one, the queue, the last ones (`--watch`, `--json`) |
 | `kami reload` | Send this kami's server code to the running pod and restart the server: no new pod, no download (`--force` with jobs running) |
 | `kami status` | Pod state, cost so far, guard, jobs done (`--json`; exit 0 ready, 2 not ready, 3 no pod) |
@@ -312,8 +346,18 @@ has two, one per pod of the way from a concept to a print:
 
 | Profile | Models | GPUs | For |
 |---|---|---|---|
-| `views` | Z-Image-Turbo + Qwen-Image-Edit-2511 | 80 GB (A100, H100) | text → the front of an object and its sides |
+| `fronts-flux` | FLUX.2 [dev], 4-bit (non-commercial licence) | 48 GB (L40S, A6000...) | text → pictures of the object's front |
+| `views` | Qwen-Image-Edit-2511 (+ Z-Image-Turbo) | 80 GB (A100, H100) | a picture of the front → its sides |
 | `mesh` (default) | Pixal3D | 24 GB+ (RTX 4090, L40S, A6000...) | those pictures → mesh |
+
+The front decides everything after it, so it gets the model that draws it best. Three
+were compared on the same subjects and seeds (152 pictures): Z-Image-Turbo keeps the
+subject but ignores pose and camera; the full Z-Image obeys them but draws the hint over
+the subject (a snake as a sausage); FLUX.2 keeps a snake a snake, lying down, facing the
+camera, in its own colours. FLUX.2 does not fit on the card next to Qwen-Image-Edit, so
+it is a pod of its own: fronts on `fronts-flux` (about a minute each), then `views` to
+turn the one you chose. `views` can still do both in one go with Z-Image-Turbo
+(`kami views "a ceramic owl"`), quickly and less faithfully to the pose.
 
 The others it can run are in `kami.toml` too, commented out; uncomment a block to use it:
 

@@ -6,6 +6,7 @@ than the RunPod proxy allows (~100 s) however long the GPU works.
 
 from __future__ import annotations
 
+import re
 import base64
 import json
 import time
@@ -168,16 +169,124 @@ def download(url: str, api_key: str, job: dict, out_dir: Path) -> list[Path]:
 
 
 # What is added to a prompt so the picture is of something a printer can make, and
-# `kami print` can colour: it stands, it is one thick piece, and its colours are few and
-# flat, with no light painted into them (a highlight would become a filament).
-# Said in the positive: the fast image models run without a negative prompt.
-# {colors} is the number of filaments. `print_hint` in kami.toml replaces it; "" turns it off.
-PRINT_HINT = ("designed as a collectible vinyl toy figure for 3D printing, one solid piece "
-              "standing upright on a wide flat base, chunky thick rounded shapes, every part "
-              "attached to the body, {colors} flat solid colours in large clearly separated "
-              "areas with crisp edges, matte uniform surfaces, flat even lighting")
+# `kami print` can colour. Each preset is a kind of print:
+# (label, what it is for, the text, how its front picture is shown or None for the usual).
+# Said in the positive: the fast image models run without a negative prompt, and naming
+# what is not wanted ("no base", "no joints") tends to draw it.
+# All of them end the same way: flat matte paint, evenly lit, because a highlight painted
+# into the texture would become a filament. The colours are the subject's own and are not
+# counted here: `kami print` reduces them to the filaments afterwards. The full Z-Image
+# takes every word at its value (84 pictures, kami-out/prompt-tests/sheets, 2026-11-20):
+# "N flat solid colours in large clearly separated areas" made toys out of building
+# blocks, "in 3 colours" a gecko half yellow and half blue, "matte uniform surfaces" a
+# figure of unpainted clay, "painted in flat matte colours" a rainbow. A custom
+# print_hint may still say {colors}: it becomes the number of filaments.
+_COLOURS = "its natural colours in flat matte paint, flat even lighting"
+PRINT_PRESETS = {
+    # The style of every preset: a figurine that simplifies its subject without ceasing to
+    # be it. "collectible vinyl toy figure ... chunky thick rounded shapes" came first, and
+    # on a model that obeys it was drawn over the subject (a snake as a sausage). On
+    # FLUX.2, 18 fronts in three styles kept every animal itself; this one, between the
+    # toy and the realistic, read best for printing (kami-out/prompt-tests/sheets/grid-run8).
+    "figure": ("Figure", "A stylised figure standing on its own wide base",
+               "stylised figurine with simplified natural proportions, smooth sculpted forms, one "
+               "solid piece standing upright on a wide flat base, " + _COLOURS, None),
+    # For models that get flexible joints cut into them afterwards (jointwright): the body
+    # must come whole and smooth, with everything that will bend lying on the plate, and
+    # the parts apart from each other so there is room to cut between them.
+    # What ran on a views pod on 2026-11-20, and what it taught:
+    # 1. "one-piece print-in-place toy, the whole creature lying flat on its belly ...
+    #    head, body, legs and tail all stretched out ... even thickness with a flat
+    #    underside": a good gecko (whole, smooth, on its belly, limbs apart, coherent
+    #    views), but a caterpillar in glossy separate segments, and a snake as a flat
+    #    cut-out with arms. It listed parts ("legs") and said "flat" of the body.
+    # 2. "a single smooth mass of matte modelling clay, a plump fully three-dimensional
+    #    creature ... as tall as it is wide ... anything that sticks out ...": far worse.
+    #    "cute snake" came out a shapeless lump in four arbitrary colours. Eighty words
+    #    about shape against two about the subject: the model drew the hint.
+    # Meanwhile `figure` drew that same snake well: short, a style to hang on to, and
+    # nothing about anatomy. That is the rule this wording still follows; the exact words
+    # are row T of the FLUX.2 run, the only ones here tried as written.
+    # Then 50 front pictures, the same subjects (snake, caterpillar, gecko) and seeds
+    # through ten wordings (kami-out/prompt-tests/sheets/grid-run1.png, grid-run2.png):
+    # - "N flat solid colours in large clearly separated areas" makes the model invent
+    #   them on a lying body (a red head, a blue segment); "in N colours" keeps the
+    #   subject's own (a yellow gecko with a red tail), and none at all gives one colour;
+    # - "head resting on the ground" works every time, and "body in a straight line" for
+    #   the gecko and the caterpillar; a snake coils whatever is said;
+    # - a caterpillar comes in segments, with feet and antennae, whatever is said;
+    # - none is a true front view; "seen from directly above" gave the gecko a perfect
+    #   plan view, and the caterpillar ignored it.
+    "flexi": ("Flexi (joints added later)",
+              "A creature lying on its belly, whole, with nothing under it: joints are cut afterwards",
+              "stylised animal figurine with simplified natural anatomy, smooth sculpted forms, "
+              "one solid piece lying on its belly directly on the ground, body in a straight "
+              "line, head resting on the ground, " + _COLOURS, None),
+    "lowpoly": ("Low poly", "A faceted sculpture: flat triangles, one colour each",
+                "designed as a low-poly sculpture for 3D printing, one solid piece standing on a "
+                "wide flat base, large flat triangular facets with sharp edges, thick sturdy "
+                "shapes, every part attached to the body, each facet a single colour, " + _COLOURS,
+                None),
+    "bust": ("Bust", "Head and shoulders, cut flat across the chest",
+             "designed as a sculpted bust for 3D printing, head and shoulders only, cut straight "
+             "across the chest into a wide flat base, one solid piece, thick sturdy shapes, "
+             "simplified bold features, " + _COLOURS, None),
+    "relief": ("Medallion", "The subject in raised relief on a thick flat-backed disc",
+               "designed as a thick round medallion for 3D printing, the subject in bold raised "
+               "relief on a flat-backed disc, simple chunky shapes with deep clear steps between "
+               "levels, one colour per level, " + _COLOURS, None),
+    "natural": ("Natural", "The object as it is, only without light painted into it",
+                "the whole object in one solid piece, complete and true to life, matte finish, "
+                "flat even lighting", None),
+}
+# What each preset keeps out, for models that read a negative prompt (Z-Image, with
+# guidance above 0; Z-Image-Turbo ignores it). Here, and only here, the unwanted is named.
+_UNWANTED = ("glossy, shiny, reflections, specular highlights, harsh shadows, gradient shading, "
+             "text, watermark, extra objects, cropped")
+PRINT_NEGATIVES = {
+    "figure": _UNWANTED,
+    "flexi": _UNWANTED + ", base, pedestal, stand, platform, joints, hinges, seams, separate "
+                         "segments, standing, raised head, coiled",
+    "lowpoly": _UNWANTED + ", smooth curved surfaces",
+    "bust": _UNWANTED + ", full body, arms, legs",
+    "relief": _UNWANTED + ", free-standing figure",
+    "natural": "glossy highlights, harsh shadows, text, watermark, extra objects, cropped",
+}
+PRINT_PRESET = "figure"          # the one used when nothing says otherwise
+PRINT_HINT = PRINT_PRESETS[PRINT_PRESET][2]
 PRINT_COLORS = 4                 # one AMS; `kami print --colors` has the same default
 MAX_PRINT_COLORS = 16
+
+# Words that take something away. The image models here run without a negative prompt, so
+# "a caterpillar without antennae" is, to them, a caterpillar and antennae.
+NEGATION = re.compile(r"\b(no|not|without|never|none|sin|ningun[ao]?)\b", re.IGNORECASE)
+
+
+def negations(prompt: str) -> list[str]:
+    """The words of a prompt that ask for something to be left out, as written."""
+    return list(dict.fromkeys(m.group(0) for m in NEGATION.finditer(prompt or "")))
+
+
+NEGATION_ADVICE = ("a prompt draws what it names, also after \"no\" or \"without\": say what you want "
+                   "in its place (\"a smooth round head\"), or name it in the negative prompt (--negative)")
+
+
+def print_hint(text: str | None = None, preset: str | None = None) -> str:
+    """The hint in force: `text` when given (kami.toml's print_hint, "" for none), else
+    the preset's, else the usual one."""
+    if text is not None:
+        return text
+    return PRINT_PRESETS[preset or PRINT_PRESET][2]
+
+
+def preset_negative(preset: str | None) -> str | None:
+    """What a preset keeps out of the picture (a negative prompt), or None."""
+    return PRINT_NEGATIVES.get(preset)
+
+
+def preset_front(preset: str | None) -> str | None:
+    """How a preset wants its front picture shown, or None for the pod's usual words."""
+    return PRINT_PRESETS[preset][3] if preset in PRINT_PRESETS else None
 
 
 def printable(prompt: str, hint: str, colors: int | None = None) -> str:

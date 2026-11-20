@@ -46,9 +46,11 @@ cloud = "SECURE"
 port = 8000
 # Where `kami mesh` / `kami image` save what they make (relative to the current directory).
 output_dir = "kami-out"
-# Prompts get a hint added so the picture is of something to print: standing on a flat
-# base, one thick piece, {colors} flat colours, matte, evenly lit. Write your own here
-# ({colors} becomes the number of filaments), or "" for prompts exactly as written.
+# Prompts get a hint added so the picture is of something to print. print_preset picks
+# which: figure (a vinyl toy on its base, the default), flexi (a creature lying flat and
+# whole, for joints cut afterwards), lowpoly, bust, relief, natural. Or write your own in
+# print_hint ({colors} becomes the number of filaments), "" for prompts exactly as written.
+# print_preset = "figure"
 # print_hint = "..."
 # The pod deletes itself after max_hours of uptime, or after idle_minutes without
 # jobs, even if your PC is off. 0 disables each one.
@@ -261,6 +263,8 @@ class Config:
     # Added to every prompt so the picture is of something printable (jobs.PRINT_HINT
     # when None; "" for none).
     print_hint: str | None = None
+    # Which of jobs.PRINT_PRESETS that hint is, when print_hint is not written out.
+    print_preset: str | None = None
 
     def profile(self, name: str | None) -> Profile:
         name = name or self.default_profile
@@ -293,6 +297,7 @@ DEFAULT_KEYS = {
     "profile": TEXT, "provider": TEXT, "container": TEXT, "storage": TEXT, "datacenter": TEXT,
     "volume_name": TEXT, "volume_size_gb": INT, "cloud": TEXT, "port": INT,
     "output_dir": TEXT, "max_hours": NUMBER, "idle_minutes": NUMBER, "print_hint": TEXT,
+    "print_preset": TEXT,
 }
 
 PROFILE_KEYS = {
@@ -316,7 +321,7 @@ RANGES = {"port": (1, 65535), "volume_size_gb": (1, None), "disk_gb": (1, None),
 IMAGE_PARAMS = ("steps", "guidance", "width", "height", "negative", "seed")
 # views: steps / guidance of the editing pipeline, the LoRA's weight, and the camera's
 # elevation and distance in the LoRA's words ("eye-level shot", "medium shot")
-VIEWS_PARAMS = ("steps", "guidance", "seed", "lora_scale", "elevation", "distance")
+VIEWS_PARAMS = ("steps", "guidance", "seed", "lora_scale", "elevation", "distance", "front_hint")
 # Both backends: TRELLIS.2 (texture_size, remesh, pipeline_type, multiview_mode) and
 # Hunyuan3D-2 (steps, octree_resolution, guidance, texture); each ignores the others.
 MESH_PARAMS = ("texture_size", "decimation_target", "remesh", "seed", "pipeline_type",
@@ -501,7 +506,17 @@ def load_config(path: Path | None = None) -> Config:
         profiles=profiles,
         provider=provider,
         print_hint=d.get("print_hint"),
+        print_preset=print_preset(d.get("print_preset")),
     )
+
+
+def print_preset(name):
+    """A print_preset of kami.toml, checked against the ones kami has."""
+    from .jobs import PRINT_PRESETS            # jobs imports this module
+    if name is not None and name not in PRINT_PRESETS:
+        raise ConfigError(f"print_preset = \"{name}\" is not a preset\n"
+                          f"The presets: {', '.join(PRINT_PRESETS)}.")
+    return name
 
 
 DEFAULT_CONTAINER = f"ghcr.io/{PLACEHOLDER}/kami-server:0.1.0"

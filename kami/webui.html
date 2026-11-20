@@ -53,7 +53,7 @@ header .wrap { display: flex; gap: 14px; align-items: center; min-height: 56px; 
 .btn.danger.armed { background: var(--bad); border-color: var(--bad); color: #fff; }
 
 /* the three stages */
-.stages { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin: 18px 0 14px; }
+.stages { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin: 18px 0 14px; }
 .stagetab { text-align: left; border: 1px solid var(--line); background: var(--panel); border-radius: 12px;
             padding: 10px 14px; cursor: pointer; display: grid; gap: 1px; }
 .stagetab b { font-size: 16px; }
@@ -82,12 +82,33 @@ label.check { display: flex; align-items: center; gap: 7px; font-size: 14px; }
 .chips input { position: absolute; opacity: 0; pointer-events: none; }
 .chips label:has(input:checked) { border-color: var(--accent); color: var(--accent); font-weight: 600; }
 .chips label:has(input:focus-visible) { outline: 2px solid var(--accent); }
-details summary { cursor: pointer; color: var(--dim); font-size: 13px; }
-details .row { margin-top: 10px; }
 .actions { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 .notice { font-size: 13px; color: var(--dim); min-height: 1.2em; }
 .notice.bad { color: var(--bad); }
 .blocked { display: grid; gap: 10px; }
+.extras { display: grid; gap: 8px; }
+.sent { display: block; white-space: pre-wrap; padding: 8px 10px; }
+.lab { display: flex; align-items: center; gap: 6px; }
+.info { width: 16px; height: 16px; border-radius: 50%; border: 1px solid var(--dim); background: none; color: var(--dim);
+        font: italic 600 11px/1 Georgia, "Times New Roman", serif; padding: 0; cursor: pointer; flex: none; }
+.info:hover, .info[aria-expanded="true"] { border-color: var(--accent); color: var(--accent); }
+.help { display: block; font-size: 12px; color: var(--dim); line-height: 1.4; }
+.btn.gear { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; font-size: 13px; }
+.formhead { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+.btn.gear svg { width: 16px; height: 16px; }
+dialog.settings { border: 1px solid var(--line); border-radius: 14px; background: var(--panel); color: var(--text);
+                  padding: 0; width: min(760px, calc(100vw - 32px)); max-height: calc(100vh - 48px); }
+dialog.settings::backdrop { background: rgba(0,0,0,.55); }
+.dialoghead { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 14px 18px;
+              border-bottom: 1px solid var(--line); position: sticky; top: 0; background: var(--panel); z-index: 1; }
+.dialoghead h2 { font-size: 17px; }
+.dialogbody { padding: 18px; display: grid; gap: 14px; }
+.dialogfoot { display: flex; justify-content: space-between; gap: 10px; padding: 12px 18px; border-top: 1px solid var(--line); }
+.group { border: 1px solid var(--line); border-radius: 12px; padding: 14px; display: grid; gap: 12px; }
+.group > h3 { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.group > h3 small { font-weight: 400; color: var(--dim); font-size: 12px; }
+.group textarea { min-height: 76px; font-size: 13px; }
+.cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; align-items: start; }
 .cmd { display: flex; gap: 8px; align-items: center; justify-content: space-between; }
 
 /* view slots and pictures */
@@ -222,6 +243,7 @@ section.block { margin: 22px 0; }
 <main class="wrap">
   <nav class="stages" role="tablist" aria-label="Stages">
     <button type="button" class="stagetab" role="tab" data-stage="concept"><b>Concept</b><span></span></button>
+    <button type="button" class="stagetab" role="tab" data-stage="views"><b>Views</b><span></span></button>
     <button type="button" class="stagetab" role="tab" data-stage="mesh"><b>Mesh</b><span></span></button>
     <button type="button" class="stagetab" role="tab" data-stage="print"><b>Print</b><span></span></button>
   </nav>
@@ -247,18 +269,52 @@ section.block { margin: 22px 0; }
 const TOKEN = document.querySelector('meta[name="kami-token"]').content;
 const FOLDER = document.querySelector('meta[name="kami-folder"]').content;
 const VIEW_ORDER = ["front", "left", "back", "right", "front-left", "front-right", "back-left", "back-right"];
-const STAGES = ["concept", "mesh", "print"];
+const STAGES = ["concept", "views", "mesh", "print"];
+
+// what the pod adds to a concept's front picture when it reports none of its own
+const FRONT_DEFAULT = "front view of the whole object, centred, full view, on a plain white background, soft even studio light";
+// the page remembers how you left it, in this browser
+const store = {
+  get(key, fallback) {
+    try { const v = JSON.parse(localStorage.getItem("kami." + key)); return v == null ? fallback : v; }
+    catch (e) { return fallback; }
+  },
+  set(key, value) { try { localStorage.setItem("kami." + key, JSON.stringify(value)); } catch (e) {} },
+  drop(key) { try { localStorage.removeItem("kami." + key); } catch (e) {} },
+};
 
 let pod = null;              // the last /api/state pod info
-let hint = false, hintColors = 4;
+let hintText = "", hintColors = 4;       // kami.toml's printing hint, and its colours
+let presets = [], presetName = null;     // the kinds of print kami has a hint for; the one in force (null: kami.toml's own text)
+// the printing hint before any rewriting: the chosen preset's, or kami.toml's
+function chosenPreset() { return concept.preset || presetName || "toml"; }
+function baseHint() {
+  const found = presets.find(x => x.name === chosenPreset());
+  return found ? found.text : hintText;
+}
+function baseNegative() {
+  const found = presets.find(x => x.name === chosenPreset());
+  return (found && found.negative) || "";
+}
+let concept = store.get("concept", {});
+let draft = "";              // the description being typed: it survives the form being redrawn
+let ownFront = null;         // a front picture of yours, given in "From image": {name, data, url}
+let takeFront = null;        // gives one to the Concept form when it is open on "From image"  // {forPrint, colors, hint, frontHint, angles, count}
 let objects = [], signature = "";
 let stage = null, picked = false;        // picked: the user chose a stage, stop following the pod
 let current = null;          // key of the object on the stage
 let meshMode = "views";      // views | each | text
 const slots = {};            // view -> {file} (library) or {name, data, url} (uploaded)
 const loose = [];            // pictures for "one mesh per picture"
-const print = {height: 80, base: 2, mode: "auto", colors: 4, palette: [], rebuild: "auto", detail: 0.3,
-               result: null, busy: false, dirty: false, error: "", forFile: null};
+const PRINT_DEFAULTS = {height: 80, base: 2, mode: "auto", colors: 4, palette: [], rebuild: "auto", detail: 0.3,
+                        smoothing: 3, minPatch: 1, keep: false};
+const print = Object.assign({}, PRINT_DEFAULTS, store.get("print", {}),
+                            {result: null, busy: false, dirty: false, error: "", forFile: null});
+function rememberPrint() {
+  const kept = {};
+  for (const key of Object.keys(PRINT_DEFAULTS)) kept[key] = print[key];
+  store.set("print", kept);
+}
 let controlsKey = "", stageKey = "";
 const doneJobs = new Set();
 
@@ -274,7 +330,7 @@ function el(tag, attrs, ...kids) {
     else if (v === true) node.setAttribute(k, "");
     else node.setAttribute(k, v);
   }
-  for (const kid of kids.flat()) if (kid != null && kid !== false) node.append(kid);
+  for (const kid of kids.flat(Infinity)) if (kid != null && kid !== false) node.append(kid);
   return node;
 }
 const fileUrl = rel => "files/" + rel.split("/").map(encodeURIComponent).join("/");
@@ -311,11 +367,15 @@ function can(name) {
   const s = served();
   if (name === "print") return true;
   if (!ready()) return false;
-  return name === "mesh" ? !!s.mesh_model : !!(s.image_model || s.views_model);
+  if (name === "mesh") return !!s.mesh_model;
+  if (name === "views") return !!s.views_model;
+  return !!(s.image_model || (s.views_model && s.views_from_prompt));      // concept: pictures from text
 }
 function podMode() {
-  const concept = can("concept"), mesh = can("mesh");
-  return concept && mesh ? "Concept + mesh pod" : mesh ? "Mesh pod" : concept ? "Concept pod" : "Pod";
+  const made = ["concept", "views", "mesh"].filter(can);
+  if (!made.length) return "Pod";
+  const text = made.join(" + ") + " pod";
+  return text[0].toUpperCase() + text.slice(1);
 }
 function obj() { return objects.find(o => o.key === current) || null; }
 function meshOf(o) { return o && o.meshes.length ? o.meshes[0] : null; }
@@ -384,7 +444,7 @@ $("#down").addEventListener("click", async () => {
 function followPod() {
   // open on what the pod is for; with no pod, on the library's last mesh ready to print
   if (picked) return;
-  const want = can("concept") ? "concept" : can("mesh") ? "mesh" : (stage || "print");
+  const want = can("concept") ? "concept" : can("views") ? "views" : can("mesh") ? "mesh" : (stage || "print");
   if (want !== stage) setStage(want, false);
 }
 function setStage(name, byUser) {
@@ -399,14 +459,14 @@ function renderStages() {
     tab.setAttribute("aria-selected", String(name === stage));
     tab.classList.toggle("here", here);
     $("span", tab).textContent = name === "print" ? "on this PC, no pod"
-      : here ? "this pod" : ready() ? "needs another pod" : "needs a pod";
+      : here ? "this pod" : ready() ? "another pod" : "needs a pod";
   }
 }
 $$(".stagetab").forEach(t => t.addEventListener("click", () => setStage(t.dataset.stage, true)));
 
 /* why a stage cannot make anything right now, and the way out */
 function blocked(name) {
-  const p = pod && pod.pod, what = name === "mesh" ? "meshes" : "concepts";
+  const p = pod && pod.pod, what = {mesh: "meshes", views: "views", concept: "pictures from text"}[name];
   const box = el("div", {class: "blocked"});
   const fitting = ((pod && pod.profiles) || []).filter(x => x[name]).map(x => x.name);
   if (p && !pod.ready) {
@@ -423,6 +483,7 @@ function blocked(name) {
     fitting.slice(0, 4).forEach(n => box.append(command("kami up -p " + n)));
   }
   if (!fitting.length) box.append(command(name === "mesh" ? "kami up -p mesh" : "kami up -p views"));
+  if (name === "views" && !p) box.append(el("p", {class: "dim", text: "A picture of the front of your own needs no Concept pod: only this one, to turn it."}));
   box.append(el("p", {class: "dim", text: "The library below and the Print stage work without a pod."}));
   return box;
 }
@@ -506,7 +567,56 @@ function renderLoose() {
 }
 
 /* --- controls shared by forms --- */
-function field(label, input) { return el("label", {class: "field"}, label, input); }
+function info(help) {
+  const button = el("button", {type: "button", class: "info", "aria-label": "What is this?", "aria-expanded": "false", title: help, text: "i"});
+  button.addEventListener("click", e => {
+    e.preventDefault();                      // inside a label: do not focus the field
+    const note = button.closest("label, .helped").querySelector(".help");
+    note.hidden = !note.hidden;
+    button.setAttribute("aria-expanded", String(!note.hidden));
+  });
+  return button;
+}
+function field(label, input, help) {
+  return el("label", {class: "field"}, el("span", {class: "lab"}, label, help ? info(help) : null), input,
+            help ? el("small", {class: "help", hidden: true, text: help}) : null);
+}
+function check(name, checked, label, help) {
+  return el("div", {class: "helped"},
+    el("label", {class: "check"}, el("input", {type: "checkbox", name, checked}), label, help ? info(help) : null),
+    help ? el("small", {class: "help", hidden: true, text: help}) : null);
+}
+function group(title, note, ...kids) {
+  return el("div", {class: "group"}, el("h3", {}, title, note ? el("small", {text: note}) : null), kids);
+}
+const GEAR = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>';
+/* The settings of a stage: a gear button and the dialog it opens. The dialog lives inside
+   the stage's form, so its fields are the form's own; `reset` forgets what was changed. */
+function settings(title, reset, ...sections) {
+  const dialog = el("dialog", {class: "settings", "aria-label": title});
+  dialog.append(
+    el("div", {class: "dialoghead"}, el("h2", {text: title}),
+       el("button", {type: "button", class: "btn small", text: "Done", onclick: () => dialog.close()})),
+    el("div", {class: "dialogbody"}, sections),
+    el("div", {class: "dialogfoot"},
+       el("button", {type: "button", class: "btn small", text: "Back to the defaults", onclick: () => { dialog.close(); reset(); }}),
+       el("span", {class: "dim", text: "Kept in this browser. The (i) explains each one."})));
+  dialog.addEventListener("click", e => { if (e.target === dialog) dialog.close(); });        // the backdrop
+  dialog.addEventListener("keydown", e => {                                                   // Enter must not send the job
+    if (e.key === "Enter" && e.target.tagName === "INPUT") { e.preventDefault(); e.target.blur(); }
+  });
+  const open = el("button", {type: "button", class: "btn gear", title, "aria-label": title, onclick: () => dialog.showModal()});
+  open.innerHTML = GEAR;
+  open.append("Settings");
+  return {open, dialog};
+}
+/* Puts a form's settings where they are expected: the gear beside its title. */
+function withSettings(form, made) {
+  const title = $("h3", form), head = el("div", {class: "formhead"});
+  title.replaceWith(head);
+  head.append(title, made.open);
+  form.append(made.dialog);
+}
 function number(name, placeholder, attrs) {
   return el("input", Object.assign({type: "number", name, placeholder: placeholder == null ? "" : String(placeholder)}, attrs || {}));
 }
@@ -514,16 +624,116 @@ function num(form, name) {
   const input = form.elements[name];
   return !input || input.value === "" ? undefined : Number(input.value);
 }
-function hintControls() {
-  if (!hint) return null;
-  return el("div", {class: "row"},
-    el("label", {class: "check", title: "Adds to the prompt: standing on a flat base, one thick piece, flat colours, matte"},
-       el("input", {type: "checkbox", name: "for_print", checked: true}), "Made for printing"),
-    field("Colours", number("hint_colors", "", {min: "1", max: "8", value: String(hintColors), style: "width:72px"})));
+const HELP = {
+  seed: "The same seed with the same settings gives the same result. Empty: a new one every time.",
+  preset: "What the picture should be of, so it can be printed: each kind adds its own words to your description. Settings shows them, to rewrite.",
+  printHint: "Added after your description, so the picture is of something a printer can make and kami print can colour. {colors} becomes the number of colours.",
+  frontHint: "Added when the front is made from your description, so the mesh model sees the whole object, centred, on a clean background.",
+  viewSteps: "Denoising steps of each view. More is slower and rarely better: the default suits the model.",
+  guidance: "How strictly the model follows the prompt. Higher is more literal, and can look harsher.",
+  lora: "How strongly the camera is turned. Lower it if the object changes between views; raise it if it barely turns.",
+  elevation: "The camera's height, in the words the LoRA was trained on: eye-level shot, high-angle shot, low-angle shot.",
+  distance: "How far the camera is, in the LoRA's words: close-up, medium shot, wide shot.",
+  imageSteps: "Denoising steps of the picture. Z-Image-Turbo is made for 8.",
+  imageGuidance: "Turbo models run at 0. Above 0 the model follows the prompt more closely and reads the negative prompt.",
+  imageSize: "In pixels, multiples of 64. The mesh models expect a square picture.",
+  negative: "What to keep out of the picture: each kind of print brings its own list. Read by models running with guidance above 0 (Z-Image); Z-Image-Turbo ignores it.",
+  texture: "The side of the mesh's texture, in pixels. Larger is sharper, and a bigger file.",
+  faces: "Triangles kept when the mesh is simplified. More keeps finer detail, and a bigger file.",
+  multiview: "How TRELLIS.2 uses several views: stochastic follows one per step, multidiffusion averages them.",
+  remesh: "Rebuilds the model's raw surface into a cleaner one. Off keeps its own triangles.",
+  height: "How tall the print is. The other two sizes follow.",
+  base: "The lowest part of the model, as a share of its height, is pressed flat so it stands on the plate. 0 leaves it as it is.",
+  filaments: "The texture is reduced to this many colours, the most used in slot 1. Fewer print faster and waste less in purges.",
+  rebuild: "Draws a new closed surface around everything the mesh encloses. Auto does it only when the mesh is open or a hollow skin.",
+  detail: "The grid a rebuilt surface is drawn on. Detail finer than this is lost; smaller is slower and a bigger file.",
+  smoothing: "Passes that straighten colour borders and remove single-triangle specks. 0 keeps every edge of the texture.",
+  minPatch: "Patches of colour under this area join the colour around them: a nozzle cannot print them, and each one is a filament change.",
+  keep: "Generated meshes carry a second surface inside. Kept, the model prints as a thin hollow shell.",
+};
+/* What is added to a prompt, in the open: the printing hint and, for a front picture, how
+   to show it. Both can be rewritten here; the last line is what the pod receives. */
+function extras(form, front) {
+  const on = concept.forPrint === undefined ? !!baseHint() : concept.forPrint;
+  const kind = el("select", {name: "preset"}, presets.map(x => new Option(x.label, x.name)),
+                  presetName ? null : new Option("As in kami.toml", "toml"));
+  kind.value = chosenPreset();
+  const about = el("small", {class: "help"});
+  const describe = () => { const found = presets.find(x => x.name === kind.value); about.textContent = found ? found.about : "The hint written in kami.toml"; };
+  const printing = el("textarea", {name: "hint_text", "aria-label": "Printing hint"});
+  const how = front ? el("textarea", {name: "front_text", "aria-label": "Front picture hint"}) : null;
+  // a kind of print may show its front its own way (a flexi from a little above); else the pod's words
+  const baseFront = () => { const found = presets.find(x => x.name === chosenPreset()); return (found && found.front) || front; };
+  kind.addEventListener("change", () => {          // another kind of print: its own words, not the edited ones
+    concept.preset = kind.value;
+    concept.hint = concept.frontHint = concept.negative = undefined;
+    printing.value = baseHint();
+    if (how) how.value = baseFront();
+    if (form.elements.i_negative) form.elements.i_negative.value = baseNegative();
+    describe();
+  });
+  const caution = el("small", {class: "help", style: "color:var(--warn)", hidden: true});
+  describe();
+  const line = el("div", {class: "extras"},
+    el("label", {class: "check"}, el("input", {type: "checkbox", name: "for_print", checked: on}), "Made for printing"),
+    el("div", {class: "row"}, el("label", {class: "field", style: "flex:3"}, el("span", {class: "lab"}, "Kind of print", info(HELP.preset)), kind,
+                                 el("small", {class: "help", hidden: true, text: HELP.preset})),
+       field("Colours", number("hint_colors", "", {min: "1", max: "16", value: String(concept.colors || hintColors)}))),
+    about, caution);
+  form.append(line);
+  printing.value = concept.hint === undefined ? baseHint() : concept.hint;
+  const section = group("The prompt", "what kami adds to your description",
+    field("When made for printing", printing, HELP.printHint));
+  if (how) {
+    how.value = concept.frontHint === undefined ? baseFront() : concept.frontHint;
+    section.append(field("For the front picture", how, HELP.frontHint));
+  }
+  section.append(el("div", {class: "field"}, "Sent to the pod", el("code", {class: "sent"})));
+  form.elements.prompt.value = draft;
+  const show = () => {
+    draft = form.elements.prompt.value;
+    const out = $(".sent", form);
+    if (out) out.textContent = sentPrompt(form);
+    const taken = [...new Set((draft.match(/\b(no|not|without|never|none|sin|ningun[ao]?)\b/gi) || []))];
+    caution.hidden = !taken.length;
+    caution.textContent = taken.length ? "\u201c" + taken.join(", ") + "\u201d: a prompt draws what it names, also after "
+      + "\u201cno\u201d or \u201cwithout\u201d. Say what you want in its place (a smooth round head), or name it under "
+      + "Settings, Negative prompt." : "";
+  };
+  form.addEventListener("input", show);
+  form.addEventListener("change", () => { rememberConcept(form, how ? baseFront() : front); show(); });
+  return {line, section, show};
+}
+const forgetConcept = () => { store.drop("concept"); concept = {}; controlsKey = ""; render(); };
+function frontApplies(form) {
+  return !!form.elements.front_text && (!form.elements.source || form.elements.source.value === "text");
+}
+function sentPrompt(form) {
+  let text = form.elements.prompt.value.trim() || "(your description)";
+  if (form.elements.for_print.checked) {
+    const added = form.elements.hint_text.value.trim().replace(/\{colors\}/g, String(num(form, "hint_colors") || hintColors));
+    if (added) text += ", " + added;
+  }
+  if (frontApplies(form) && form.elements.front_text.value.trim()) text += ", " + form.elements.front_text.value.trim();
+  return text;
+}
+function rememberConcept(form, front) {
+  const typed = form.elements.hint_text.value, shown = form.elements.front_text;
+  concept = Object.assign({}, concept, {forPrint: form.elements.for_print.checked, colors: num(form, "hint_colors") || hintColors,
+    hint: typed === baseHint() ? undefined : typed,
+    frontHint: !shown ? concept.frontHint : shown.value === front ? undefined : shown.value});
+  if (form.elements.i_negative) {
+    const unwanted = form.elements.i_negative.value;
+    concept.negative = unwanted === baseNegative() ? undefined : unwanted;
+  }
+  if (form.elements.angle) concept.angles = $$('[name="angle"]:checked', form).map(i => i.value);
+  if (form.elements.count) concept.count = num(form, "count") || undefined;
+  store.set("concept", concept);
 }
 function hintBody(form) {
-  if (!hint) return {};
-  return form.elements.for_print.checked ? {colors: num(form, "hint_colors") || hintColors} : {print_hint: false};
+  return form.elements.for_print.checked
+    ? {colors: num(form, "hint_colors") || hintColors, hint: form.elements.hint_text.value}
+    : {print_hint: false};
 }
 async function send(form, body, after) {
   const notice = $("[data-notice]", form), buttons = $$("button", form);
@@ -548,76 +758,160 @@ function fail(form, text) {
   notice.textContent = text;
 }
 
-/* --- Concept: text or a picture -> the views of one object --- */
+/* --- Concept: a description -> pictures of the object's front --- */
 function conceptControls() {
-  const s = served(), views = !!s.views_model, images = !!s.image_model, o = obj(), front = frontOf(o);
+  const s = served(), views = !!s.views_model, images = !!s.image_model;
   const form = el("form", {});
   const vd = s.views_defaults || {}, idf = s.image_defaults || {};
-  form.append(el("h3", {text: views ? "An object, seen from its sides" : "A picture of the object"}));
-  const source = el("select", {name: "source"});
-  if (images || s.views_from_prompt) source.append(new Option("From a description", "text"));
-  if (views) {
-    if (front) source.append(new Option("From the picture on the stage", "stage"));
-    source.append(new Option("From a picture of mine", "upload"));
-  }
+  // the pod's own words for a front picture (older pods do not say: theirs is the same text)
+  const frontHint = typeof vd.front_hint === "string" ? vd.front_hint : FRONT_DEFAULT;
+  form.append(el("h3", {text: "The object, from a description"}));
   const prompt = el("textarea", {name: "prompt", placeholder: "a ceramic owl", "aria-label": "Description"});
-  const upload = el("input", {type: "file", name: "front", accept: ".png,.jpg,.jpeg,.webp,.avif,.heic,.heif,.tif,.tiff,.bmp,.gif"});
-  const hints = hintControls();
-  const sync = () => {
-    prompt.hidden = source.value !== "text";
-    upload.hidden = source.value !== "upload";
-    if (hints) hints.hidden = source.value !== "text";
-  };
-  source.addEventListener("change", sync);
-  if (source.options.length > 1) form.append(field("Start", source));
-  form.append(prompt, upload, hints);
-  if (views) {
-    const angles = (s.view_angles && s.view_angles.length ? s.view_angles : VIEW_ORDER).filter(a => a !== "front");
-    const usual = vd.views || ["left", "back", "right"];
-    form.append(el("div", {}, el("div", {class: "dim", text: "Turn the camera to"}),
-      el("div", {class: "chips", style: "margin-top:6px"}, VIEW_ORDER.filter(a => angles.includes(a)).map(a =>
-        el("label", {}, el("input", {type: "checkbox", name: "angle", value: a, checked: usual.includes(a)}), a)))));
-  }
-  const advanced = el("div", {class: "row"}, field("Seed", number("seed", "random")),
-    field("Steps", number("steps", (views ? vd.steps : idf.steps) ?? "default", {min: "1"})),
-    field("Guidance", number("guidance", (views ? vd.guidance : idf.guidance) ?? "default", {step: "0.1", min: "0"})),
-    views ? field("LoRA weight", number("lora_scale", vd.lora_scale ?? 0.9, {step: "0.05", min: "0", max: "1.5"})) : null);
-  form.append(el("details", {}, el("summary", {text: "Advanced"}), advanced));
-  const actions = el("div", {class: "actions"});
-  if (views) actions.append(el("button", {type: "submit", class: "btn primary", value: "views", text: "Make views"}));
+  form.append(prompt);
+  const added = extras(form, frontHint);
+  const text = (name, placeholder) => el("input", {type: "text", name, placeholder: placeholder == null ? "" : String(placeholder)});
+  const sections = [added.section];
   if (images) {
-    actions.append(el("button", {type: "submit", class: "btn" + (views ? "" : " primary"), value: "image",
-                                 text: views ? "Try fronts" : "Make pictures"}),
-                   field("How many", number("count", "", {min: "1", max: "8", value: views ? "4" : "1", style: "width:72px"})));
+    sections.push(group("The picture", s.image_model.split("/").pop(),
+      el("div", {class: "cols"},
+        field("Steps", number("i_steps", idf.steps ?? "default", {min: "1"}), HELP.imageSteps),
+        field("Guidance", number("i_guidance", idf.guidance ?? "default", {step: "0.1", min: "0"}), HELP.imageGuidance),
+        field("Width", number("i_width", idf.width ?? 1024, {step: "64", min: "256"}), HELP.imageSize),
+        field("Height", number("i_height", idf.height ?? 1024, {step: "64", min: "256"}), HELP.imageSize)),
+      field("Negative prompt", text("i_negative", "nothing"), HELP.negative)));
+    sections[sections.length - 1].querySelector('[name="i_negative"]').value =
+      concept.negative === undefined ? baseNegative() : concept.negative;
+  }
+  sections.push(group("Repeating a result", null,
+    el("div", {class: "cols"}, field("Seed", number("seed", "random"), HELP.seed))));
+  const dialog = settings("Concept settings", forgetConcept, sections);
+  const actions = el("div", {class: "actions"});
+  if (images) {
+    actions.append(el("button", {type: "submit", class: "btn primary", value: "image", text: "Make pictures"}),
+                   field("How many", number("count", "", {min: "1", max: "8", value: String(concept.count || 4), style: "width:72px"})));
+  }
+  // in one go, for when the first picture will do: the pod makes the front and turns it
+  if (views && (images || s.views_from_prompt)) {
+    actions.append(el("button", {type: "submit", class: "btn" + (images ? "" : " primary"), value: "views",
+                                 text: images ? "Straight to views" : "Make views"}));
   }
   form.append(actions, el("div", {class: "notice", "data-notice": ""}));
-  if (views && images) form.append(el("p", {class: "dim", text:
-    "Try fronts makes quick candidates. Pick one in the library, then make its views from the picture on the stage."}));
-  form.addEventListener("submit", async e => {
+  withSettings(form, dialog);
+  added.show();
+  form.append(el("p", {class: "dim", text: images
+    ? "Make a few and pick the one you like in the library: the Views stage turns the camera around it."
+      + (views ? " Straight to views skips the choosing." : "")
+    : "This pod makes the front and its sides in one go."}));
+  form.addEventListener("submit", e => {
     e.preventDefault();
-    const kind = (e.submitter && e.submitter.value) || (views ? "views" : "image");
-    const params = {seed: num(form, "seed"), steps: num(form, "steps"), guidance: num(form, "guidance")};
-    const text = prompt.value.trim(), from = source.value || "text";
+    const kind = (e.submitter && e.submitter.value) || (images ? "image" : "views");
+    const typed = prompt.value.trim(), seed = num(form, "seed");
+    if (!typed) return fail(form, "Describe the object first");
+    const imageParams = images ? {seed, steps: num(form, "i_steps"), guidance: num(form, "i_guidance"), width: num(form, "i_width"),
+                                  height: num(form, "i_height"), negative: form.elements.i_negative.value.trim()} : {seed};
     if (kind === "image") {
-      if (!text || from !== "text") return fail(form, "Describe the object to try fronts of it");
-      return send(form, Object.assign({kind: "image", prompt: text, count: num(form, "count") || 1, params}, hintBody(form)));
+      return send(form, Object.assign({kind: "image", prompt: typed, count: num(form, "count") || 1, params: imageParams,
+                                       front_hint: form.elements.front_text.value}, hintBody(form)));
     }
-    const angles = $$('[name="angle"]:checked', form).map(i => i.value);
-    if (!angles.length) return fail(form, "Pick at least one side to turn to");
-    params.lora_scale = num(form, "lora_scale");
-    const body = {kind: "views", angles, params};
-    if (from === "text") {
-      if (!text) return fail(form, "Describe the object first");
-      Object.assign(body, {prompt: text}, hintBody(form));
-    } else if (from === "stage") {
-      body.front = {file: front};
-    } else {
-      if (!upload.files[0]) return fail(form, "Choose the picture of its front");
-      try { body.front = pictureBody(await readPicture(upload.files[0])); } catch (err) { return fail(form, err.message); }
-    }
-    send(form, body);
+    const params = {seed};
+    // only a pod that says it takes a front hint gets ours (older ones add their own)
+    if (typeof vd.front_hint === "string") params.front_hint = form.elements.front_text.value;
+    if (images) params.image = Object.assign({}, imageParams, {seed: undefined});      // the front the pod makes first
+    send(form, Object.assign({kind: "views", prompt: typed, params,
+                              angles: concept.angles && concept.angles.length ? concept.angles : undefined}, hintBody(form)));
   });
-  sync();
+  return form;
+}
+function pictureTile(file, label, extra) {
+  return el("figure", {class: "view"}, el("img", {src: fileUrl(file), alt: label, loading: "lazy", onclick: () => lightbox(file)}),
+            el("figcaption", {}, el("span", {text: label}), extra));
+}
+function conceptStage(box) {
+  const o = obj(), front = frontOf(o);
+  if (!front) {
+    box.append(el("div", {class: "viewer"}, el("p", {text: o ? "This object has no pictures, only a mesh."
+      : "Describe an object on the left. Its pictures appear here, and stay in the library below."})));
+    return;
+  }
+  const tiles = el("div", {class: "views"});
+  if (o.views.front) tiles.append(pictureTile(o.views.front, "front"));
+  o.images.forEach(file => tiles.append(pictureTile(file, "picture")));
+  box.append(tiles);
+  const sides = Object.keys(o.views).filter(v => v !== "front").length;
+  box.append(el("div", {class: "next"},
+    el("span", {class: "grow dim", text: sides ? "It has " + sides + " side view" + (sides > 1 ? "s" : "") + " already."
+      : "Next: its sides, from this picture. Other candidates are in the library below."}),
+    el("button", {type: "button", class: "btn primary", text: sides ? "See its views" : "Turn it around",
+                  onclick: () => setStage("views", true)})));
+}
+
+/* --- Views: a picture of the front -> the object from its sides --- */
+function viewsControls() {
+  const s = served(), vd = s.views_defaults || {}, o = obj(), front = frontOf(o);
+  const form = el("form", {});
+  form.append(el("h3", {text: "Its sides, from a picture of the front"}));
+  // a picture of yours, from anywhere (dropped, pasted or chosen), or the one on the stage
+  const zone = el("div", {class: "drop", role: "button", tabindex: "0"});
+  const staged = front ? el("div", {}, el("div", {class: "dim", style: "margin-bottom:6px", text: "None given: the picture on the stage is used"}),
+    el("div", {class: "strip"}, el("img", {src: fileUrl(front), alt: "The picture on the stage"}))) : null;
+  const back = el("button", {type: "button", class: "btn small", text: "Use the picture on the stage instead",
+                             onclick: () => takeFront(null)});
+  const paint = () => {
+    zone.innerHTML = "";
+    if (ownFront) zone.append(el("div", {class: "strip", style: "justify-content:center;margin-bottom:6px"},
+                                 el("img", {src: ownFront.url, alt: ownFront.name})), ownFront.name + " · drop, paste or click to change it");
+    else zone.append("Drop a picture of the front here, paste it, or click to choose");
+    if (staged) staged.hidden = !!ownFront;
+    back.hidden = !(ownFront && front);
+  };
+  takeFront = pic => {
+    if (ownFront) URL.revokeObjectURL(ownFront.url);
+    ownFront = pic;
+    paint();
+  };
+  zone.addEventListener("click", () => pickFile(false, takeFront));
+  zone.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pickFile(false, takeFront); } });
+  zone.addEventListener("dragover", e => { e.preventDefault(); zone.classList.add("over"); });
+  zone.addEventListener("dragleave", () => zone.classList.remove("over"));
+  zone.addEventListener("drop", async e => {
+    e.preventDefault(); zone.classList.remove("over");
+    if (e.dataTransfer.files[0]) { try { takeFront(await readPicture(e.dataTransfer.files[0])); } catch (err) {} }
+  });
+  form.append(el("p", {class: "dim", text: "The whole object, centred, on a plain background. Its sides are made from it, "
+    + "so what it shows is what you get."}), zone, back, staged);
+  const angles = (s.view_angles && s.view_angles.length ? s.view_angles : VIEW_ORDER).filter(a => a !== "front");
+  const usual = concept.angles || vd.views || ["left", "back", "right"];
+  form.append(el("div", {}, el("div", {class: "dim", text: "Turn the camera to"}),
+    el("div", {class: "chips", style: "margin-top:6px"}, VIEW_ORDER.filter(a => angles.includes(a)).map(a =>
+      el("label", {}, el("input", {type: "checkbox", name: "angle", value: a, checked: usual.includes(a)}), a)))));
+  const text = (name, placeholder) => el("input", {type: "text", name, placeholder: placeholder == null ? "" : String(placeholder)});
+  const dialog = settings("Views settings", () => { concept.angles = undefined; store.set("concept", concept); controlsKey = ""; render(); },
+    group("Turning the camera", s.views_model ? s.views_model.split("/").pop() : null,
+      el("div", {class: "cols"},
+        field("Steps", number("steps", vd.steps ?? "default", {min: "1"}), HELP.viewSteps),
+        field("Guidance", number("guidance", vd.guidance ?? "default", {step: "0.1", min: "0"}), HELP.guidance),
+        field("LoRA weight", number("lora_scale", vd.lora_scale ?? 0.9, {step: "0.05", min: "0", max: "1.5"}), HELP.lora),
+        field("Camera height", text("elevation", vd.elevation || "eye-level shot"), HELP.elevation),
+        field("Camera distance", text("distance", vd.distance || "medium shot"), HELP.distance))),
+    group("Repeating a result", null, el("div", {class: "cols"}, field("Seed", number("seed", "random"), HELP.seed))));
+  form.append(el("div", {class: "actions"}, el("button", {type: "submit", class: "btn primary", text: "Make views"})),
+              el("div", {class: "notice", "data-notice": ""}));
+  withSettings(form, dialog);
+  form.addEventListener("change", () => {
+    concept.angles = $$('[name="angle"]:checked', form).map(i => i.value);
+    store.set("concept", concept);
+  });
+  form.addEventListener("submit", e => {
+    e.preventDefault();
+    const chosen = $$('[name="angle"]:checked', form).map(i => i.value);
+    if (!chosen.length) return fail(form, "Pick at least one side to turn to");
+    if (!ownFront && !front) return fail(form, "Give a picture of the front: drop it above, paste it, or click to choose");
+    send(form, {kind: "views", angles: chosen, front: ownFront ? pictureBody(ownFront) : {file: front},
+                params: {seed: num(form, "seed"), steps: num(form, "steps"), guidance: num(form, "guidance"),
+                         lora_scale: num(form, "lora_scale"), elevation: form.elements.elevation.value.trim(),
+                         distance: form.elements.distance.value.trim()}});
+  });
+  paint();
   return form;
 }
 function redoView(o, view, button) {
@@ -626,33 +920,31 @@ function redoView(o, view, button) {
   post("api/jobs", {kind: "views", angles: [view], front: {file: o.views.front || frontOf(o)}, params: {}})
     .then(refresh).catch(e => { button.textContent = e.message; });
 }
-function conceptStage(box) {
-  const o = obj();
-  if (!o || (!Object.keys(o.views).length && !o.images.length)) {
+function viewsStage(box) {
+  const o = obj(), front = frontOf(o);
+  if (!front) {
     box.append(el("div", {class: "viewer"}, el("p", {text: o ? "This object has no pictures, only a mesh."
-      : "Describe an object on the left. Its front and its sides appear here, and stay in the library below."})));
+      : "Give a picture of an object's front on the left, or pick one in the library. Its sides appear here."})));
     return;
   }
   const names = VIEW_ORDER.filter(v => o.views[v]);
-  const canRedo = can("concept") && !!served().views_model && !!frontOf(o);
+  const canRedo = can("views") && !!o.views.front;
   const tiles = el("div", {class: "views"});
   for (const v of names) {
-    const cap = el("figcaption", {}, el("span", {text: v}));
+    let again = null;
     if (canRedo && v !== "front") {
-      const again = el("button", {type: "button", class: "btn small", text: "Redo", title: "Make this view again from the front"});
+      again = el("button", {type: "button", class: "btn small", text: "Redo", title: "Make this view again from the front"});
       again.addEventListener("click", () => redoView(o, v, again));
-      cap.append(again);
     }
-    tiles.append(el("figure", {class: "view"}, el("img", {src: fileUrl(o.views[v]), alt: v + " view", loading: "lazy",
-                                                         onclick: () => lightbox(o.views[v])}), cap));
+    tiles.append(pictureTile(o.views[v], v, again));
   }
-  for (const file of o.images) {
-    tiles.append(el("figure", {class: "view"}, el("img", {src: fileUrl(file), alt: o.name, loading: "lazy",
-                                                         onclick: () => lightbox(file)}),
-                    el("figcaption", {}, el("span", {text: names.length ? "picture" : "front candidate"}))));
-  }
+  if (!names.length) o.images.slice(0, 1).forEach(file => tiles.append(pictureTile(file, "front, not turned yet")));
   box.append(tiles);
-  if (names.length > 1) box.append(el("p", {class: "dim", text:
+  if (names.length < 2) {
+    box.append(el("p", {class: "dim", text: "Only its front so far. Make views turns the camera around it."}));
+    return;
+  }
+  box.append(el("p", {class: "dim", text:
     "Check that the back and the sides belong to the same object as the front before making the mesh: the mesh copies what it sees."}));
   const next = el("div", {class: "next"});
   if (can("mesh")) {
@@ -660,8 +952,7 @@ function conceptStage(box) {
                 el("button", {type: "button", class: "btn primary", text: "Make its mesh",
                               onclick: () => { fillSlots(o); meshMode = "views"; setStage("mesh", true); }}));
   } else {
-    const order = names.length ? names : ["front"];
-    const parts = order.map(v => (names.length ? v + "=" : "") + '"' + FOLDER.replace(/\\/g, "/") + "/" + (o.views[v] || o.images[0]) + '"');
+    const parts = names.map(v => v + '="' + FOLDER.replace(/\\/g, "/") + "/" + o.views[v] + '"');
     next.append(el("div", {class: "grow"}, el("div", {class: "dim", text: "Next: the mesh, on a mesh pod. In a terminal:"}),
                    command("kami mesh " + parts.join(" "))));
   }
@@ -671,6 +962,7 @@ function conceptStage(box) {
 /* --- Mesh: views -> GLB --- */
 function meshControls() {
   const s = served(), most = s.max_views || 1, form = el("form", {}), md = s.mesh_defaults || {};
+  let added = null;
   const modes = [];
   if (most >= 2) modes.push(["views", "One object, its views"]);
   modes.push(["each", most >= 2 ? "A mesh per picture" : "From pictures"]);
@@ -700,20 +992,26 @@ function meshControls() {
     });
     form.append(drop, el("div", {class: "thumbs", id: "loose"}));
   } else {
-    form.append(el("textarea", {name: "prompt", placeholder: "a ceramic owl", "aria-label": "Description"}), hintControls(),
-                el("p", {class: "dim", text: "One picture is made from the text, then its mesh: the back is the model's guess."}));
+    form.append(el("textarea", {name: "prompt", placeholder: "a ceramic owl", "aria-label": "Description"}));
+    added = extras(form, null);
+    form.append(el("p", {class: "dim", text: "One picture is made from the text, then its mesh: the back is the model's guess."}));
   }
   const texture = el("select", {name: "texture_size"}, new Option(md.texture_size ? md.texture_size + " (default)" : "default", ""));
   [1024, 2048, 4096].forEach(n => texture.append(new Option(String(n), String(n))));
-  const row = el("div", {class: "row"}, field("Seed", number("seed", "random")), field("Texture", texture),
-    field("Faces", number("decimation_target", md.decimation_target ?? "default", {min: "1000", step: "1000"})));
-  if (meshMode === "views" && s.multiview_modes) {
-    row.append(field("Views are", el("select", {name: "multiview_mode"}, s.multiview_modes.map(m => new Option(m, m)))));
-  }
-  form.append(el("details", {}, el("summary", {text: "Advanced"}), row,
-    el("label", {class: "check", style: "margin-top:10px"}, el("input", {type: "checkbox", name: "remesh", checked: md.remesh !== false}), "Remesh the surface")));
+  const sections = added ? [added.section] : [];
+  sections.push(group("The mesh", s.mesh_model ? s.mesh_model.split("/").pop() : null,
+    el("div", {class: "cols"}, field("Texture", texture, HELP.texture),
+      field("Faces", number("decimation_target", md.decimation_target ?? "default", {min: "1000", step: "1000"}), HELP.faces),
+      meshMode === "views" && s.multiview_modes
+        ? field("Several views", el("select", {name: "multiview_mode"}, s.multiview_modes.map(m => new Option(m, m))), HELP.multiview) : null),
+    check("remesh", md.remesh !== false, "Remesh the surface", HELP.remesh)));
+  sections.push(group("Repeating a result", null,
+    el("div", {class: "cols"}, field("Seed", number("seed", "random"), HELP.seed))));
+  const dialog = settings("Mesh settings", () => { controlsKey = ""; render(); }, sections);
   form.append(el("div", {class: "actions"}, el("button", {type: "submit", class: "btn primary", id: "mesh-go", text: "Make mesh"})),
               el("div", {class: "notice", "data-notice": ""}));
+  withSettings(form, dialog);
+  if (added) added.show();
   form.addEventListener("submit", e => {
     e.preventDefault();
     const params = {seed: num(form, "seed"), texture_size: num(form, "texture_size"),
@@ -770,8 +1068,8 @@ function printControls() {
   const form = el("form", {});
   form.append(el("h3", {text: "A 3MF to print in colours"}),
     el("div", {class: "row"},
-      field("Height (mm)", number("height", "", {min: "5", max: "400", step: "1", value: String(print.height)})),
-      field("Flat base (%)", number("base", "", {min: "0", max: "40", step: "0.5", value: String(print.base)}))));
+      field("Height (mm)", number("height", "", {min: "5", max: "400", step: "1", value: String(print.height)}), HELP.height),
+      field("Flat base (%)", number("base", "", {min: "0", max: "40", step: "0.5", value: String(print.base)}), HELP.base)));
   const auto = print.mode === "auto";
   form.append(el("div", {class: "seg", role: "group", "aria-label": "Colours"},
     el("button", {type: "button", "aria-pressed": String(auto), text: "Find the colours",
@@ -785,8 +1083,7 @@ function printControls() {
                   }})));
   if (auto) {
     form.append(el("div", {class: "row"},
-      field("How many filaments", number("colors", "", {min: "1", max: "16", step: "1", value: String(print.colors)}))),
-      el("p", {class: "dim", text: "The colours that describe the texture best. Fewer print faster and waste less in purges."}));
+      field("How many filaments", number("colors", "", {min: "1", max: "16", step: "1", value: String(print.colors)}), HELP.filaments)));
   } else {
     const box = el("div", {class: "swatches"});
     print.palette.forEach((hex, i) => {
@@ -804,17 +1101,32 @@ function printControls() {
   }
   const rebuild = el("select", {name: "rebuild"}, [["auto", "only if it is not a closed solid"], ["always", "always"], ["never", "never"]]
     .map(([v, t]) => new Option(t, v, false, v === print.rebuild)));
-  form.append(el("details", {}, el("summary", {text: "Advanced"}), el("div", {class: "row"}, field("Rebuild the surface", rebuild),
-    field("Detail (mm)", number("detail", "", {min: "0.1", max: "2", step: "0.05", value: String(print.detail)})))));
+  const dialog = settings("Print settings", () => {
+    store.drop("print"); Object.assign(print, PRINT_DEFAULTS, {palette: [], colors: hintColors});
+    controlsKey = ""; render(); queuePrint();
+  },
+    group("The solid", "making the mesh something a printer can build",
+      el("div", {class: "cols"}, field("Rebuild the surface", rebuild, HELP.rebuild),
+        field("Detail (mm)", number("detail", "", {min: "0.1", max: "2", step: "0.05", value: String(print.detail)}), HELP.detail)),
+      check("keep", print.keep, "Keep the surfaces inside", HELP.keep)),
+    group("The colours", "turning the texture into filaments",
+      el("div", {class: "cols"},
+        field("Border clean-up (passes)", number("smoothing", "", {min: "0", max: "20", step: "1", value: String(print.smoothing)}), HELP.smoothing),
+        field("Smallest patch (mm²)", number("min_patch", "", {min: "0", max: "50", step: "0.5", value: String(print.minPatch)}), HELP.minPatch))));
   form.append(el("div", {class: "actions"},
     el("button", {type: "submit", class: "btn primary", id: "print-save", text: "Save 3MF"})),
     el("div", {class: "notice", "data-notice": "", id: "print-notice"}));
+  withSettings(form, dialog);
   form.addEventListener("change", () => {
     print.height = num(form, "height") || print.height;
     print.base = num(form, "base") ?? print.base;
     if (form.elements.colors) print.colors = num(form, "colors") || print.colors;
     print.rebuild = form.elements.rebuild.value;
     print.detail = num(form, "detail") || print.detail;
+    print.smoothing = num(form, "smoothing") ?? print.smoothing;
+    print.minPatch = num(form, "min_patch") ?? print.minPatch;
+    print.keep = form.elements.keep.checked;
+    rememberPrint();
     queuePrint();
   });
   form.addEventListener("submit", e => { e.preventDefault(); runPrint(true); });
@@ -832,7 +1144,9 @@ async function runPrint(save) {
   print.busy = true;
   print.error = "";
   stageKey = ""; renderStage();
-  const body = {file: mesh.file, height: print.height, base: print.base, rebuild: print.rebuild, detail: print.detail, save};
+  rememberPrint();
+  const body = {file: mesh.file, height: print.height, base: print.base, rebuild: print.rebuild, detail: print.detail,
+                smoothing: print.smoothing, min_patch: print.minPatch, keep_cavities: print.keep, save};
   if (print.mode === "mine") body.palette = print.palette; else body.colors = print.colors;
   try {
     print.result = await post("api/print", body);
@@ -887,15 +1201,16 @@ function printStage(box) {
 /* --- rendering --- */
 function renderControls() {
   const s = served();
-  const key = [stage, ready(), can(stage), meshMode, hint, print.mode, print.palette.length, JSON.stringify(s),
-               stage === "concept" ? (frontOf(obj()) || "") : "", pod && pod.pod ? pod.pod.profile : ""].join("|");
+  const key = [stage, ready(), can(stage), meshMode, hintText, presets.length, presetName, print.mode, print.palette.length, JSON.stringify(s),
+               stage === "views" ? (frontOf(obj()) || "") : "", pod && pod.pod ? pod.pod.profile : ""].join("|");
   if (key === controlsKey) return;
   controlsKey = key;
   const box = $("#controls");
   box.innerHTML = "";
   if (stage === "print") box.append(printControls());
   else if (!can(stage)) box.append(blocked(stage));
-  else box.append(stage === "mesh" ? meshControls() : conceptControls());
+  else box.append(stage === "mesh" ? meshControls() : stage === "views" ? viewsControls() : conceptControls());
+  if (stage !== "views") takeFront = null;
   renderSlots();
   renderLoose();
 }
@@ -917,6 +1232,7 @@ function renderStage() {
   }}));
   box.append(head);
   if (stage === "concept") conceptStage(box);
+  else if (stage === "views") viewsStage(box);
   else if (stage === "mesh") meshStage(box);
   else printStage(box);
 }
@@ -956,8 +1272,10 @@ function select(key, byUser) {
   fillSlots(o);
   if (byUser && o) {
     picked = true;
-    if (meshOf(o)) { if (stage === "concept") stage = "mesh"; }
-    else if (stage === "print" || (stage === "mesh" && !can("mesh"))) stage = "concept";
+    const turned = Object.keys(o.views).length > 1;
+    if (meshOf(o)) { if (stage === "concept" || stage === "views") stage = "mesh"; }
+    else if (stage === "print" || (stage === "mesh" && !can("mesh"))) stage = turned ? "views" : "concept";
+    else if (stage === "concept" && turned) stage = "views";
     window.scrollTo({top: 0, behavior: "smooth"});
   }
   if (stage === "print") queuePrint();
@@ -985,6 +1303,11 @@ document.addEventListener("keydown", e => {
   }
 });
 document.addEventListener("paste", async e => {
+  if (stage === "views" && takeFront && can("views")) {            // the pasted picture is the front to turn
+    const file = [...(e.clipboardData || {}).items || []].filter(i => i.kind === "file").map(i => i.getAsFile())[0];
+    if (file) { try { takeFront(await readPicture(file)); } catch (err) {} }
+    return;
+  }
   if (stage !== "mesh" || !can("mesh")) return;
   const files = [...(e.clipboardData || {}).items || []].filter(i => i.kind === "file").map(i => i.getAsFile());
   for (const f of files) {
@@ -1049,7 +1372,8 @@ function followJobs(list) {
     if ($("#stage").classList.contains("full")) continue;
     current = o.key;
     fillSlots(o);
-    if (meshOf(o) && stage === "concept" && j.kind !== "views" && j.kind !== "image") stage = "mesh";
+    if (j.kind === "views") { if (stage === "concept") stage = "views"; }
+    else if (meshOf(o) && j.kind !== "image" && (stage === "concept" || stage === "views")) stage = "mesh";
     render();
   }
 }
@@ -1081,9 +1405,11 @@ async function refresh() {
     if (r.ok) {
       const s = await r.json();
       pod = s.pod;
-      hint = !!s.print_hint;
+      hintText = s.print_hint_text || "";
+      presets = s.print_presets || [];
+      presetName = s.print_preset || null;
       hintColors = s.print_colors || 4;
-      if (first) { print.colors = hintColors; first = false; }
+      if (first) { if (!store.get("print", null)) print.colors = hintColors; first = false; }
       renderPod();
       followPod();
       if (!stage) setStage("print", false);

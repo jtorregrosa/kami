@@ -1731,7 +1731,7 @@ class WebUI(unittest.TestCase):
         self.assertNotIn("{{", page)
         self.assertNotIn("owl.glb", page)                     # the library comes from /api/objects
         self.assertIn(webui.MODEL_VIEWER, page)
-        for stage in ("Concept", "Mesh", "Print"):
+        for stage in ("Concept", "Views", "Mesh", "Print"):
             self.assertIn(f"<b>{stage}</b>", page)
 
     def test_signature_changes_with_a_new_result(self):
@@ -1906,6 +1906,10 @@ class WebUI(unittest.TestCase):
         self.assertEqual(state["pod"]["pod"]["id"], "p1")
         self.assertNotIn(b"pod-secret-key", body)
         self.assertEqual(state["print_colors"], jobs.PRINT_COLORS)
+        self.assertIsInstance(state["print_hint_text"], str)   # the page shows it, to be rewritten
+        self.assertEqual([p["name"] for p in state["print_presets"]], list(jobs.PRINT_PRESETS))
+        self.assertEqual(set(state["print_presets"][0]), {"name", "label", "about", "text", "front", "negative"})
+        self.assertIsNone(state["print_preset"])               # a Mock backend names none
         self.assertIs(state["print_hint"], True)              # a Mock backend has one
 
     def test_only_the_page_can_act(self):
@@ -1970,9 +1974,11 @@ class WebUI(unittest.TestCase):
         self.assertNotIn("secret", first["served"])
         served.assert_called_once()                       # cached per pod
         # which profile makes what, for the page to say how to get to another stage
-        stages = {p["name"]: (p["concept"], p["mesh"]) for p in first["profiles"]}
+        stages = {p["name"]: (p["concept"], p["views"], p["mesh"]) for p in first["profiles"]}
         self.assertEqual(set(stages), set(cfg.profiles))
-        self.assertIn((False, True), stages.values())
+        self.assertEqual(stages["views"], (True, True, False))             # pictures from text, and turns them
+        self.assertEqual(stages["fronts-flux"], (True, False, False))      # pictures alone
+        self.assertEqual(stages["mesh"], (False, False, True))
 
 
 class Reload(unittest.TestCase):
@@ -2989,10 +2995,10 @@ class PrintHintTests(unittest.TestCase):
 
     def test_the_hint_follows_the_prompt(self):
         sent = jobs.printable("a ceramic owl", jobs.PRINT_HINT)
-        self.assertTrue(sent.startswith("a ceramic owl, designed as"))
-        for said in ("flat base", "one solid piece", "4 flat solid colours", "matte"):
+        self.assertTrue(sent.startswith("a ceramic owl, stylised figurine"))
+        for said in ("flat base", "one solid piece", "natural colours", "matte"):
             self.assertIn(said, sent)
-        self.assertIn("2 flat solid colours", jobs.printable("owl", jobs.PRINT_HINT, 2))
+        self.assertEqual(jobs.printable("owl", jobs.PRINT_HINT, 2), jobs.printable("owl", jobs.PRINT_HINT, 7))
         self.assertNotIn("{", sent)
         self.assertEqual(jobs.printable("owl", ""), "owl")
         self.assertEqual(jobs.printable("owl", "  "), "owl")
@@ -3007,7 +3013,7 @@ class PrintHintTests(unittest.TestCase):
         with mock.patch.object(cli.ui, "hint") as hint:
             self.assertEqual(cli.print_prompt(self.args(), cfg), jobs.printable("an owl", jobs.PRINT_HINT))
             self.assertIn("--as-written", hint.call_args[0][0])
-            self.assertIn("3 flat solid colours", cli.print_prompt(self.args(colors=3), cfg))
+            self.assertIn("natural colours", cli.print_prompt(self.args(colors=3), cfg))
         with mock.patch.object(cli.ui, "hint") as hint:
             self.assertEqual(cli.print_prompt(self.args(as_written=True), cfg), "an owl")
             hint.assert_not_called()
@@ -3040,4 +3046,157 @@ class PrintHintTests(unittest.TestCase):
         for colors in (0, 17, "4", True):
             with self.assertRaisesRegex(ValueError, "colors"):
                 webui.build_bodies({"kind": "image", "prompt": "an owl", "colors": colors}, hint)
+
+    def test_presets(self):
+        self.assertEqual(jobs.PRINT_HINT, jobs.PRINT_PRESETS["figure"][2])
+        self.assertEqual(jobs.print_hint(), jobs.PRINT_HINT)
+        self.assertEqual(jobs.print_hint(None, "flexi"), jobs.PRINT_PRESETS["flexi"][2])
+        self.assertEqual(jobs.print_hint("my own", "flexi"), "my own")       # written out: it wins
+        self.assertEqual(jobs.print_hint("", "flexi"), "")
+        for name, (label, about, text, front) in jobs.PRINT_PRESETS.items():
+            self.assertTrue(label and about, name)
+            self.assertEqual(jobs.preset_front(name), front)
+            if front:
+                self.assertIn("front view", front, name)             # the camera LoRA turns from a front
+                self.assertNotRegex(front, r"\b(no|not|without|never)\b", name)
+            self.assertIn("matte", text, name)                               # no light painted in
+            self.assertNotRegex(text, r"\b(no|not|without|never)\b", name)    # said in the positive
+            self.assertLess(len(jobs.printable("an owl", text, 4)), 800, name)
+            # colours are not counted in a prompt (the full Z-Image painted blocks of them),
+            # nor called uniform (it left the figure unpainted): kami print reduces them
+            self.assertNotRegex(text, r"\{colors\}|uniform|separated areas", name)
+        # a flexi comes whole and smooth, lying on the plate: the joints are cut afterwards,
+        # so nothing in its words may draw them, nor a base
+        flexi = jobs.PRINT_PRESETS["flexi"][2]
+        for said in ("lying on its belly directly on the ground", "body in a straight line",
+                     "head resting on the ground", "natural colours in flat matte paint"):
+            self.assertIn(said, flexi)
+        # nor parts it may not have (a snake got arms from "legs")
+        self.assertNotRegex(flexi, r"joint|hinge|segment|articulat|base\b|standing|upright|print-in-place|legs?\b|limbs?\b")
+        self.assertIn("simplified natural anatomy", flexi)
+        # "flat" belongs to the paint and the light alone: said of the body, it drew a cut-out
+        self.assertNotRegex(flexi.split("its natural colours")[0], r"\bflat\b|even thickness")
+        # it is `figure`, which draws well, with only its stance changed: a longer hint drew itself
+        figure = jobs.PRINT_PRESETS["figure"][2]
+        self.assertTrue(flexi.startswith("stylised") and figure.startswith("stylised"))
+        # the style simplifies the subject; it must not tell it what shape to be
+        for text in (flexi, figure):
+            self.assertNotRegex(text, r"toy|chunky|thick|rounded shapes|cute")
+        self.assertLess(len(flexi), len(figure) + 70)
+        self.assertIsNone(jobs.preset_front("flexi"))
+        self.assertIsNone(jobs.preset_front("figure"))
+        self.assertIsNone(jobs.preset_front(None))
+
+    def test_presets_name_the_unwanted_only_in_the_negative_prompt(self):
+        self.assertEqual(set(jobs.PRINT_NEGATIVES), set(jobs.PRINT_PRESETS))
+        flexi = jobs.preset_negative("flexi")
+        for unwanted in ("base", "joints", "separate segments", "glossy", "coiled"):
+            self.assertIn(unwanted, flexi)
+            self.assertNotIn(unwanted, jobs.PRINT_PRESETS["flexi"][2])     # never in the prompt itself
+        self.assertNotIn("base", jobs.preset_negative("figure"))           # a figure stands on one
+        self.assertIsNone(jobs.preset_negative(None))
+        cfg = config.fallback_config()
+        self.assertEqual(cli.with_negative({}, self.args(preset="flexi"), cfg), {"negative": flexi})
+        self.assertEqual(cli.with_negative({"negative": "mine"}, self.args(preset="flexi"), cfg), {"negative": "mine"})
+        self.assertEqual(cli.with_negative({}, self.args(as_written=True), cfg), {})
+        cfg.print_hint = "my own words"                                    # no preset in force: nothing added
+        self.assertEqual(cli.with_negative({"steps": 30}, self.args(), cfg), {"steps": 30})
+
+    def test_the_page_sends_the_fronts_own_parameters_with_a_views_job(self):
+        views, = webui.build_bodies({"kind": "views", "prompt": "an owl", "params": {
+            "steps": 40, "image": {"negative": "base, joints", "steps": 32, "guidance": 4}}}, "")
+        self.assertEqual(views[1]["params"], {"steps": 40, "image": {"negative": "base, joints", "steps": 32,
+                                                                    "guidance": 4.0}})
+        plain, = webui.build_bodies({"kind": "views", "prompt": "an owl", "params": {"image": {}}}, "")
+        self.assertNotIn("image", plain[1]["params"])
+        for bad in ({"image": {"lora_scale": 1}}, {"image": "x"}, "x"):
+            with self.assertRaises(ValueError):
+                webui.build_bodies({"kind": "views", "prompt": "an owl", "params": bad}, "")
+
+    def test_the_shipped_profiles_make_fronts_with_models_that_obey(self):
+        cfg = config.load_config(config.SOURCE_ROOT / "kami.toml")
+        views, fronts = cfg.profiles["views"], cfg.profiles["fronts-flux"]
+        # views turns the camera; its own front model is the quick one, for one-go jobs
+        self.assertEqual(views.image_model, "Tongyi-MAI/Z-Image-Turbo")
+        self.assertTrue(views.views_model and views.offload)
+        # FLUX.2 for the fronts worth keeping: its own pod, it does not fit next to Qwen-Image-Edit
+        self.assertEqual((fronts.image_model, fronts.views_model, fronts.mesh_model),
+                         ("diffusers/FLUX.2-dev-bnb-4bit", "", ""))
+        self.assertFalse(fronts.offload)
+
+    def test_taking_something_away_is_called_out(self):
+        self.assertEqual(jobs.negations("cute caterpillar without antenna, no legs, Not shiny"), ["without", "no", "Not"])
+        self.assertEqual(jobs.negations("a knot of snow in a notebook"), [])
+        self.assertEqual(jobs.negations(""), [])
+        cfg = config.fallback_config()
+        with mock.patch.object(cli.ui, "hint"), mock.patch.object(cli.ui, "warn") as warn:
+            cli.print_prompt(self.args(prompt="a caterpillar without antennae"), cfg)
+            self.assertIn("\"without\" in the prompt", warn.call_args[0][0])
+            warn.reset_mock()
+            cli.print_prompt(self.args(), cfg)
+            warn.assert_not_called()
+
+    def test_a_presets_front_goes_with_the_views_job(self):
+        cfg = config.fallback_config()
+        self.assertEqual(cli.preset_in_force(self.args(preset="flexi"), cfg), "flexi")
+        self.assertEqual(cli.preset_in_force(self.args(), cfg), "figure")
+        self.assertIsNone(cli.preset_in_force(self.args(preset="flexi", as_written=True), cfg))
+        cfg.print_hint = "my own"
+        self.assertIsNone(cli.preset_in_force(self.args(), cfg))
+
+    def test_a_preset_is_picked_in_kami_toml_or_by_flag(self):
+        cfg = config.fallback_config()
+        with mock.patch.object(cli.ui, "hint") as hint:
+            sent = cli.print_prompt(self.args(preset="flexi", colors=3), cfg)
+            self.assertEqual(sent, jobs.printable("an owl", jobs.PRINT_PRESETS["flexi"][2], 3))
+            self.assertIn("`flexi` printing preset", hint.call_args[0][0])
+        cfg.print_preset = "bust"
+        with mock.patch.object(cli.ui, "hint"):
+            self.assertIn("sculpted bust", cli.print_prompt(self.args(), cfg))
+            self.assertIn("low-poly", cli.print_prompt(self.args(preset="lowpoly"), cfg))
+        self.assertEqual(cli.WebBackend(cfg).print_preset, "bust")
+        cfg.print_hint = "my own words"
+        with mock.patch.object(cli.ui, "hint") as hint:
+            self.assertEqual(cli.print_prompt(self.args(), cfg), "an owl, my own words")
+            self.assertIn("kami.toml's printing hint", hint.call_args[0][0])
+            self.assertIn("lying on its belly", cli.print_prompt(self.args(preset="flexi"), cfg))    # the flag wins
+        backend = cli.WebBackend(cfg)
+        self.assertEqual((backend.print_hint, backend.print_preset), ("my own words", None))
+        self.assertEqual(config.print_preset("flexi"), "flexi")
+        with self.assertRaisesRegex(config.ConfigError, "not a preset"):
+            config.print_preset("statue")
+
+    def test_the_page_may_write_its_own_hints(self):
+        hint = "flat base, {colors} colours"
+        own, = webui.build_bodies({"kind": "image", "prompt": "an owl", "hint": " low poly, {colors} inks ",
+                                   "colors": 2, "front_hint": "front view, white background"}, hint)
+        self.assertEqual(own[1]["prompt"], "an owl, low poly, 2 inks, front view, white background")
+        self.assertEqual(own[1]["name"], "an-owl")
+        none, = webui.build_bodies({"kind": "image", "prompt": "an owl", "hint": "", "front_hint": ""}, hint)
+        self.assertEqual(none[1]["prompt"], "an owl")                      # written empty: nothing added
+        bare, = webui.build_bodies({"kind": "image", "prompt": "an owl", "print_hint": False,
+                                    "front_hint": "front view"}, hint)
+        self.assertEqual(bare[1]["prompt"], "an owl, front view")
+        # a views job's front hint is the pod's to add: it goes as a parameter
+        views, = webui.build_bodies({"kind": "views", "prompt": "an owl", "hint": "matte",
+                                     "params": {"front_hint": "seen from the front", "elevation": "high-angle shot",
+                                                "distance": "wide shot"}}, hint)
+        self.assertEqual(views[1]["prompt"], "an owl, matte")
+        self.assertEqual(views[1]["params"], {"front_hint": "seen from the front", "elevation": "high-angle shot",
+                                              "distance": "wide shot"})
+        for bad in ({"hint": 5}, {"hint": "x" * 2001}, {"front_hint": ["a"]}):
+            with self.assertRaises(ValueError):
+                webui.build_bodies({"kind": "image", "prompt": "an owl", **bad}, hint)
+
+    def test_the_pod_takes_the_front_hint_as_a_parameter(self):
+        from kami import server
+        self.assertEqual(server.VIEWS_DEFAULTS["front_hint"], server.FRONT_HINT)
+        self.assertEqual(server.front_prompt("an owl", server.VIEWS_DEFAULTS), f"an owl, {server.FRONT_HINT}")
+        self.assertEqual(server.front_prompt("an owl", {"front_hint": "from the front"}), "an owl, from the front")
+        self.assertEqual(server.front_prompt("an owl", {"front_hint": "  "}), "an owl")
+        self.assertIn("front_hint", config.VIEWS_PARAMS)
+        with mock.patch.object(server.PIPES, "image", object()):
+            server.check_views_params({"front_hint": "x"}, has_front=False)
+            with self.assertRaisesRegex(ValueError, "front_hint must be text"):
+                server.check_views_params({"front_hint": 3}, has_front=False)
 

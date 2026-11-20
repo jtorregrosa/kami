@@ -1,8 +1,8 @@
 """`kami ui`: a local web page to go from a concept to a mesh to a print.
 
-The page has three stages, Concept (text or a picture -> the views of an object), Mesh
-(views -> GLB) and Print (GLB -> 3MF, on this PC), and opens on the one the active pod
-serves. A small HTTP server on 127.0.0.1 serves the page, the files of the output folder
+The page has four stages, Concept (text -> pictures of an object's front), Views (a
+picture of the front -> its sides), Mesh (views -> GLB) and Print (GLB -> 3MF, on this
+PC), and opens on the first one the active pod serves. A small HTTP server on 127.0.0.1 serves the page, the files of the output folder
 (the library, grouped by object), and a JSON API the page uses: the pod's state, the jobs
 sent from the page, and the actions (send jobs, prepare a print, delete the pod). kami relays jobs to the pod itself, so the pod's API key
 never reaches the browser. It never brings a pod up: that stays a deliberate `kami up`.
@@ -60,7 +60,9 @@ MULTIVIEW_MODES = ("stochastic", "multidiffusion")
 MAX_VIEWS = 8                    # views of one object in one job (the pod may take fewer)
 IMAGE_PARAMS = {"seed": int, "steps": int, "guidance": float, "width": int, "height": int,
                 "negative": str}
-VIEWS_PARAMS = {"seed": int, "steps": int, "guidance": float, "lora_scale": float}
+VIEWS_PARAMS = {"seed": int, "steps": int, "guidance": float, "lora_scale": float,
+                "elevation": str, "distance": str, "front_hint": str}
+MAX_HINT = 2000                  # characters of a hint written on the page
 
 
 # --- results (the library) ---
@@ -171,8 +173,11 @@ class Printer:
         source = resolve(self.folder, request.get("file"))
         if source is None or source.suffix.lower() not in MESH_SUFFIXES:
             raise ValueError("Pick a mesh (.glb) from the library")
-        geometry = _params({k: request.get(k) for k in ("height", "base", "detail", "rebuild")},
-                           {"height": float, "base": float, "detail": float, "rebuild": str})
+        geometry = _params({k: request.get(k) for k in ("height", "base", "detail", "rebuild", "keep_cavities")},
+                           {"height": float, "base": float, "detail": float, "rebuild": str,
+                            "keep_cavities": bool})
+        finish = _params({k: request.get(k) for k in ("smoothing", "min_patch")},
+                         {"smoothing": int, "min_patch": float})
         colors = request.get("colors")
         if colors is not None and (isinstance(colors, bool) or not isinstance(colors, int)):
             raise ValueError("colors must be a whole number")
@@ -187,11 +192,12 @@ class Printer:
                 self.prepared = printing.prepare(
                     source, height=geometry.get("height", 80.0), base=geometry.get("base", 2.0),
                     detail=geometry.get("detail", printing.DETAIL),
-                    rebuilding=geometry.get("rebuild", "auto"))
+                    rebuilding=geometry.get("rebuild", "auto"),
+                    keep_cavities=geometry.get("keep_cavities", False))
                 self.key = key
             mesh, report = self.prepared
             labels, swatches, share = printing.paint(mesh, colors=colors or jobs.PRINT_COLORS,
-                                                     palette=palette)
+                                                     palette=palette, **finish)
             saved = None
             if request.get("save") is True:
                 target = jobs.free_path(source.with_suffix(".3mf"))
@@ -344,16 +350,30 @@ def _prompt(request: dict) -> str:
     return prompt.strip()
 
 
+def _hint(request: dict, key: str) -> str | None:
+    """A hint the page wrote itself, or None when it sent none."""
+    text = request.get(key)
+    if text is None:
+        return None
+    if not isinstance(text, str) or len(text) > MAX_HINT:
+        raise ValueError(f"{key} must be text of at most {MAX_HINT} characters")
+    return text.strip()
+
+
 def _sent(request: dict, prompt: str, hint: str) -> str:
     """The prompt as the pod gets it: with the printing hint, unless the request says
-    `"print_hint": false`; `"colors"` is how many filaments the hint asks for."""
-    if request.get("print_hint") is False:
-        return prompt
-    colors = request.get("colors")
-    if colors is not None and (isinstance(colors, bool) or not isinstance(colors, int)
-                               or not 1 <= colors <= jobs.MAX_PRINT_COLORS):
-        raise ValueError(f"colors must be 1 to {jobs.MAX_PRINT_COLORS}")
-    return jobs.printable(prompt, hint, colors)
+    `"print_hint": false`. `"hint"` is the page's own wording of it (else kami.toml's),
+    `"colors"` how many filaments it asks for, and `"front_hint"` (image jobs: a front to
+    choose) what the pod itself adds to the front of a views job."""
+    if request.get("print_hint") is not False:
+        colors = request.get("colors")
+        if colors is not None and (isinstance(colors, bool) or not isinstance(colors, int)
+                                   or not 1 <= colors <= jobs.MAX_PRINT_COLORS):
+            raise ValueError(f"colors must be 1 to {jobs.MAX_PRINT_COLORS}")
+        own = _hint(request, "hint")
+        prompt = jobs.printable(prompt, hint if own is None else own, colors)
+    front = _hint(request, "front_hint") if request.get("kind") == "image" else None
+    return f"{prompt}, {front}" if front else prompt
 
 
 def _picture(item, folder: Path | None) -> tuple[str, bytes]:
@@ -445,7 +465,14 @@ def build_bodies(request: dict, hint: str = "", folder: Path | None = None) -> l
                  {"kind": "text-to-mesh", "prompt": _sent(request, prompt, hint),
                   "name": jobs.safe_name(prompt), "params": params})]
     if kind == "views":
-        params = _params(request.get("params"), VIEWS_PARAMS)
+        raw = request.get("params")
+        if raw is not None and not isinstance(raw, dict):
+            raise ValueError("params must be an object")
+        raw = dict(raw or {})
+        front_params = _params(raw.pop("image", None), IMAGE_PARAMS)     # of the front made from text
+        params = _params(raw, VIEWS_PARAMS)
+        if front_params:
+            params["image"] = front_params
         angles = request.get("angles")
         if angles is not None:
             if (not isinstance(angles, list) or not angles
@@ -578,9 +605,15 @@ def make_handler(folder: Path, port_ref: list, token: str, work: Work, status: P
             if path == "/api/state":
                 pod = status.get()
                 listing = pod_jobs.get(bool(pod.get("pod") and pod.get("ready")))
+                preset = getattr(backend, "print_preset", None)
                 return self._json(200, {"signature": signature(folder), "pod": pod,
                                         "jobs": work.listing(listing),
                                         "print_hint": bool(getattr(backend, "print_hint", "")),
+                                        "print_hint_text": str(getattr(backend, "print_hint", "") or ""),
+                                        "print_preset": preset if isinstance(preset, str) else None,
+                                        "print_presets": [{"name": name, "label": label, "about": about, "text": text, "front": front,
+                                                           "negative": jobs.preset_negative(name)}
+                                                          for name, (label, about, text, front) in jobs.PRINT_PRESETS.items()],
                                         "print_colors": jobs.PRINT_COLORS})
             if path == "/api/objects":
                 return self._json(200, {"signature": signature(folder), "objects": objects(folder)})

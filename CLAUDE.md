@@ -24,6 +24,8 @@ Your PC ── kami mesh photo.png ──HTTPS──► https://<pod>-8000.proxy
 - `kami/cli.py` — argparse CLI and the commands (`init`, `doctor`, `gpus`, `prices`,
   `profiles`, `volume`, `up`, `down`, `status`, `cost`, `logs`, `watchdog`, `mesh`, `image`,
   `views`, `jobs`, `reload`, `print`, `ui`).
+- (`server.FRONT_HINT`, what a views job adds to its front picture, is the default of the
+  `front_hint` parameter: a job or `views_defaults` may replace it, "" drops it.)
 - `kami/server.py` — runs *inside the pod* (its source is sent in `KAMI_SERVER_SRC` and
   run with `python3 -c`): loads the pipelines, serves `/health`, `/metrics`, `/v1/info`
   and the jobs API (`POST /v1/jobs`, `GET /v1/jobs` (all, with stage and progress),
@@ -46,7 +48,11 @@ Your PC ── kami mesh photo.png ──HTTPS──► https://<pod>-8000.proxy
   Stdlib HTTP; torch / trellis2 / diffusers are imported lazily, so the tests import it
   without them. kami never imports it at runtime.
 - `kami/jobs.py` — client side of the jobs API: submit, poll with a progress line, download
-  (never overwriting). `PRINT_HINT` / `printable`: the hint every prompt gets on the
+  (never overwriting). `PRINT_PRESETS` (figure, flexi, lowpoly, bust, relief, natural:
+  label, purpose, text; `print_hint(text, preset)` is the one in force: `--preset`, then
+  kami.toml's `print_hint`, then its `print_preset`, then figure; written in the positive,
+  and flexi names neither joints nor a base, since jointwright cuts the joints later).
+  `PRINT_HINT` / `printable`: the hint every prompt gets on the
   client (CLI `print_prompt`, page `webui._sent`) so the picture is printable: flat base,
   one piece, `{colors}` flat colours, matte. On by default; `--as-written`, `print_hint`
   in kami.toml. File names and labels keep the prompt as written.
@@ -74,10 +80,11 @@ Your PC ── kami mesh photo.png ──HTTPS──► https://<pod>-8000.proxy
   `extends`; `mesh_model` / `image_model`), `.env`, local state in `.kami/`.
 - `kami/api.py`, `kami/runpod.py`, `kami/vast.py`, `kami/catalog.py` — provider clients and
   GPU name tables (unchanged from ronin).
-- `kami/webui.py` + `kami/webui.html` — `kami ui`: a page on 127.0.0.1 in three stages,
-  Concept (text or a front picture -> views; image and views jobs), Mesh (views in named
-  slots -> GLB) and Print (`printing` on this PC, painted preview), opening on the stage
-  the pod's `/v1/info` says it serves. kami relays the jobs (the pod key stays in kami);
+- `kami/webui.py` + `kami/webui.html` — `kami ui`: a page on 127.0.0.1 in four stages,
+  Concept (text -> front pictures; image jobs, or a views job in one go), Views (a front
+  picture, from the stage or dropped / pasted, -> its sides; views jobs), Mesh (views in
+  named slots -> GLB) and Print (`printing` on this PC, painted preview), opening on the
+  first stage the pod's `/v1/info` says it serves. kami relays the jobs (the pod key stays in kami);
   the page never starts a pod, and a stage the pod lacks shows the `kami up -p` for it
   (`WebBackend.status()["profiles"]`). `objects()` is the library: `output_dir` and one
   folder deep, grouped by name (`VIEW_OF`: owl-left-2.png is the newest left view of
@@ -85,7 +92,12 @@ Your PC ── kami mesh photo.png ──HTTPS──► https://<pod>-8000.proxy
   uploads or `{file}` from the library. `Printer`: POST /api/print (`prepare` cached, so
   colours answer at once; `save` writes the 3MF), /preview/<id>.glb, /thumbs/<mesh> (a
   drawn PNG for meshes with no picture). The page builds its DOM from JSON with
-  `textContent`, never HTML from file names. Host header checked; POSTs need the page's
+  `textContent`, never HTML from file names. Every text added to a prompt is shown and
+  editable there (`hint`, `front_hint` in a request; "Sent to the pod" is the result),
+  with the models' and `kami print`'s parameters, in each stage's settings dialog
+  (`settings()`: a gear beside the form's title, a `<dialog>` inside the form so its
+  fields stay the form's; `group()` sections, `field(label, input, help)` with an (i)
+  from `HELP`). The page keeps them in localStorage (`kami.concept`, `kami.print`). Host header checked; POSTs need the page's
   token, JSON and same Origin. `cli.WebBackend` gives it the pod status, target, `down`.
 - `kami/watchdog.py`, `kami/ui.py`, `kami/mascot.py` — local guard, console output, mascot.
 - `docker/Dockerfile.pixal3d` — Pixal3D + NAF (pinned) + natten 0.17.5 wheel on top of the base.
@@ -153,17 +165,52 @@ with a real pod: no job has been sent from the new page, so "Make views", "Try f
 "Redo" of one view, "Make mesh" from library pictures and a finished job landing on the
 stage are untested end to end (their request bodies are unit-tested).
 
+Print presets on a real `views` pod (2026-11-20): `figure` gave a clean vinyl figure on
+its base, with consistent views ("cute caterpillar", "cute snake"). `flexi` went through
+two wordings that day, both recorded at `PRINT_PRESETS["flexi"]`: the first gave a good
+gecko but a segmented caterpillar and a cut-out snake; the second, long and all about
+shape, gave a shapeless lump. Lesson kept in a test: a preset is short, leans on a style
+the model knows, and says nothing of anatomy. The wording in use came out of 50 front
+pictures, same subjects and seeds through ten wordings (`kami-out/prompt-tests/`, sheets in `sheets/`, made
+with `kami image --as-written --seed`, seconds each: the way to tune a preset, instead of
+judging one picture). It has not been through `kami views` or a mesh yet; lowpoly, bust,
+relief and natural have never run. A "without
+antenna" in a prompt drew antennae. No preset sets its own front hint now; the mechanism
+(`preset_front`) stays. Open: whether
+ring views at the object's height suit a ground-hugging creature at all, or one picture
+from above into `kami mesh` does better. The pod needs `kami reload` to take a preset's
+front hint (`front_hint`); "Try fronts" gets it through the relay either way.
+
 The printing hint (`jobs.PRINT_HINT`) has never been sent to a pod: whether Z-Image-Turbo
 and Qwen follow it (flat colours, base), and whether `kami print` then gives cleaner
 colours than the glossy owl, is to be compared on the next `views-qwen` pod, same concept
 and seed, with and without `--as-written`.
 
-Profiles in the shipped `kami.toml` (2026-11-20): two are active, `views` (Z-Image-Turbo +
-Qwen-Image-Edit, was `views-qwen`) and `mesh` (Pixal3D, was `pixal3d`, the default). The
+Profiles in the shipped `kami.toml` (2026-11-20): `views` (Z-Image + Qwen-Image-Edit, was
+`views-qwen`), `mesh` (Pixal3D, was `pixal3d`, the default) and `fronts-flux` (FLUX.2
+[dev] 4-bit as `image_model` alone). `views` tried the full Z-Image (32 steps, guidance 4)
+for a day and went back to Turbo (see "Front models compared" below). Both the full
+Z-Image and FLUX.2 as `image_model` load on the current server image. The
 rest are commented out at the end of the file: `trellis` (TRELLIS.2, was `mesh`), `image`,
 `studio`, `studio-24`, `hunyuan`, `hunyuan-mv`, `views-flux`. Notes above written before
 that use the old names. `kami init`'s template in config.py still writes a TRELLIS.2
 `mesh` profile.
+
+Front models compared on real pods (2026-11-20; 152 pictures, same three subjects and two
+seeds, sheets in `kami-out/prompt-tests/sheets/`, $2.67): what matters first is that the
+subject stays itself. Z-Image-Turbo keeps the subject and ignores pose and camera. The
+full Z-Image (loads on the current image, ~32 s a picture on an A100) obeys pose and its
+negative prompt, but draws the hint's shape words over the subject (a snake as a sausage
+or a row of balls) and takes colour words at their value (blocks, or unpainted clay).
+FLUX.2 [dev] 4-bit as `image_model` (`fronts-flux`: loads, ~62 s a picture on an L40S)
+kept every subject recognisable, made real front views, natural colours and no base, in
+all three styles tried; "stylised animal figurine with simplified natural anatomy" read
+best for printing. None of them lays a snake in a straight line. After it: `flexi` is
+that stylised wording as tried (row T); `figure` is the same style standing on a base,
+not yet run; `views` went back to Z-Image-Turbo for one-go jobs, and fronts are meant to
+come from `fronts-flux`. Not done: views or a mesh from a FLUX.2 front; lowpoly, bust,
+relief and natural on any model. The presets' negative prompts are read only by a model
+with guidance (the full Z-Image); FLUX.2 and Turbo ignore them.
 
 ## Working notes
 

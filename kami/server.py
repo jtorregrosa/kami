@@ -153,6 +153,15 @@ VIEW_ANGLES = {"front": "front view", "front-right": "front-left quarter view",
 # the front picture of a concept: what a mesh model wants to see
 FRONT_HINT = ("front view of the whole object, centred, full view, on a plain white "
               "background, soft even studio light")
+# a default like the others: `front_hint` in views_defaults or in a job's params replaces
+# it, "" leaves the prompt alone
+VIEWS_DEFAULTS.setdefault("front_hint", FRONT_HINT)
+
+
+def front_prompt(prompt, p):
+    """The prompt of a concept's front picture: the concept, then how to show it."""
+    hint = str(p.get("front_hint", FRONT_HINT) or "").strip()
+    return f"{prompt}, {hint}" if hint else prompt
 
 
 def log(msg):
@@ -647,13 +656,13 @@ def make_views(job):
         image_params = dict(job.params.get("image") or {})
         if p.get("seed") is not None:
             image_params.setdefault("seed", p["seed"])
-        front = make_image(f"{job.prompt}, {FRONT_HINT}", image_params,
+        front = make_image(front_prompt(job.prompt, p), image_params,
                            os.path.join(job.dir, "front-raw.png"))
     else:                                    # FLUX.2: the same model makes the front picture
         PIPES.use("views")
         stage("image")
         _lora(False)
-        front = views_call(f"{job.prompt}, {FRONT_HINT}", p)
+        front = views_call(front_prompt(job.prompt, p), p)
     front = editing_size(on_white(front))
     save(front, "front")
     PIPES.use("views")
@@ -1295,7 +1304,7 @@ def check_views_params(params, has_front):
         raise ValueError(f"views must be a list of: {', '.join(VIEW_ANGLES)}")
     if len(set(names)) != len(names):
         raise ValueError("each view may appear once")
-    for key in ("elevation", "distance"):
+    for key in ("elevation", "distance", "front_hint"):
         if key in params and not isinstance(params[key], str):
             raise ValueError(f"{key} must be text, like {VIEWS_DEFAULTS[key]!r}")
     if not has_front and PIPES.image is None and VIEWS_FAMILY != "flux2":

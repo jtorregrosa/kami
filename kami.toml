@@ -26,9 +26,11 @@ cloud = "SECURE"
 port = 8000
 # Where `kami mesh` / `kami image` save what they make (relative to the current directory).
 output_dir = "kami-out"
-# Prompts get a hint added so the picture is of something to print: standing on a flat
-# base, one thick piece, {colors} flat colours, matte, evenly lit. Write your own here
-# ({colors} becomes the number of filaments), or "" for prompts exactly as written.
+# Prompts get a hint added so the picture is of something to print. print_preset picks
+# which: figure (a vinyl toy on its base, the default), flexi (a creature lying flat and
+# whole, for joints cut afterwards), lowpoly, bust, relief, natural. Or write your own in
+# print_hint ({colors} becomes the number of filaments), "" for prompts exactly as written.
+# print_preset = "figure"
 # print_hint = "..."
 # The pod deletes itself after max_hours of uptime, or after idle_minutes without jobs,
 # even if your PC is off. 0 disables each. Override with `kami up --max-hours / --idle`.
@@ -38,16 +40,26 @@ idle_minutes = 30
 # Two profiles, one per pod of the way from a concept to a print (`kami ui` shows them
 # as its Concept and Mesh stages; Print runs on your PC):
 #
-#   kami up -p views   a description -> the front of an object and its sides
-#   kami up -p mesh    those pictures -> a textured mesh (GLB)
+#   kami up -p fronts-flux   a description -> pictures of the object's front (FLUX.2)
+#   kami up -p views         a picture of the front -> its sides
+#   kami up -p mesh          those pictures -> a textured mesh (GLB)
 #
 # The other profiles kami can run are at the end of this file, commented out.
 
-# views: Z-Image-Turbo (6B, Apache-2.0) makes the front from the text, Qwen-Image-Edit-2511
-# (20B, Apache-2.0) with fal's Multiple-Angles LoRA (96 camera poses, Apache-2.0) turns the
-# camera around it (left, back, right, and the diagonals). `kami views "a ceramic owl"`,
-# `kami image "..."` for fronts alone. Qwen-Edit in bf16 is ~57 GB: an 80 GB card, the two
-# models taking turns on it (offload).
+# views: Qwen-Image-Edit-2511 (20B, Apache-2.0) with fal's Multiple-Angles LoRA (96 camera
+# poses, Apache-2.0) turns the camera around a picture of the front (left, back, right,
+# and the diagonals): `kami views --front picture.png`, "Views" in kami ui. Qwen-Edit in
+# bf16 is ~57 GB: an 80 GB card.
+#
+# It can make the front itself too, with Z-Image-Turbo (6B, Apache-2.0; 8 steps, a few
+# seconds), for `kami views "a ceramic owl"` in one go: the two models take turns on the
+# card (offload). Turbo keeps the subject but pays little attention to pose and camera;
+# the fronts worth keeping come from fronts-flux, below.
+#
+# The full Z-Image (image_model = "Tongyi-MAI/Z-Image", image_defaults = { steps = 32,
+# guidance = 4.0, width = 1024, height = 1024 }) was tried in its place: it obeys the pose
+# and reads the negative prompt, but draws the hint over the subject (a snake as a
+# sausage) at 32 s a picture. Kept here as the note of what was tried.
 [profiles.views]
 image_model = "Tongyi-MAI/Z-Image-Turbo"
 image_defaults = { steps = 8, guidance = 0.0, width = 1024, height = 1024 }
@@ -75,6 +87,22 @@ min_vram_gb = 24
 min_ram_gb = 64          # both pipelines in RAM
 disk_gb = 80
 mesh_defaults = { texture_size = 2048, decimation_target = 500000, remesh = true }
+
+# fronts-flux: FLUX.2 [dev] (Black Forest Labs, 32B; NON-COMMERCIAL licence) for the front
+# picture: `kami image "..."`, or "Make pictures" in kami ui's Concept stage. Of the three
+# front models tried it is the one that keeps the subject itself (a snake a snake) while
+# laying it down, facing the camera, in its own colours; ~1 min a picture on an L40S.
+# Its 4-bit build fits a 48 GB card, but not the 80 GB one next to Qwen-Image-Edit (its
+# quantised parts stay on the GPU, ~32 GB, and Qwen needs ~57), so it is a pod of its
+# own: make the fronts here, `kami down`, then `kami up -p views` and turn the chosen one
+# in the Views stage (`kami views --front picture.png`).
+[profiles.fronts-flux]
+image_model = "diffusers/FLUX.2-dev-bnb-4bit"
+image_defaults = { steps = 28, guidance = 4.0, width = 1024, height = 1024 }
+gpus = ["L40S", "RTX A6000", "L40", "RTX 6000 Ada", "A100 PCIe 80GB"]
+min_vram_gb = 48
+min_ram_gb = 64
+disk_gb = 60           # ~34 GB of weights
 
 
 # ---------------------------------------------------------------------------------------

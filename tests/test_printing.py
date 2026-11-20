@@ -366,6 +366,13 @@ class PrintingTests(unittest.TestCase):
             self.assertIn('displaycolor="#0000FF"', model_of(self.root / "owl.3mf"))
             self.assertEqual(printer.run({"file": "owl.glb", "save": True})["saved"], "owl-2.3mf")
             self.assertEqual(prepare.call_count, 2)                           # another height
+            # every setting of `kami print` can come from the page
+            kept = printer.run({"file": "owl.glb", "height": 40, "base": 0, "keep_cavities": True,
+                                "smoothing": 0, "min_patch": 0, "colors": 2})
+            self.assertEqual((prepare.call_count, kept["cavities"], kept["triangles"]), (3, 0, 24))
+            self.assertEqual([round(c["share"], 2) for c in kept["colors"]], [0.83, 0.17])   # both shells, their red faces too
+            with self.assertRaises(ValueError):
+                printer.run({"file": "owl.glb", "smoothing": 1.5})
         for bad in ({"file": "missing.glb"}, {"file": "../owl.glb"}, {"file": "owl.glb", "colors": "2"},
                     {"file": "owl.glb", "palette": "#fff"}, {"file": "owl.glb", "height": "tall"}, []):
             with self.assertRaises(ValueError):
