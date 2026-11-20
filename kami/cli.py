@@ -1686,7 +1686,7 @@ def cmd_views(args, cfg: Config) -> None:
     _, _, served = job_target(cfg, state)
     if not served.get("views_model"):
         raise ConfigError(f"The active pod (profile {state.get('profile')}) serves no views model\n"
-                          "`kami down`, then `kami up -p views-qwen` (or views-flux).")
+                          "`kami down`, then `kami up -p views` (a profile with views_model).")
     if not front and not served.get("views_from_prompt"):
         raise ConfigError(f"{served['views_model']} edits pictures and this pod has no image model\n"
                           "Give the front with --front, or use a profile that makes it from text.")
@@ -1702,8 +1702,7 @@ def cmd_views(args, cfg: Config) -> None:
     saved = run_job(cfg, state, body, label, output_dir(args, cfg))
     command = mesh_command(saved)
     if command:
-        ui.hint(f"`{command}` on a Pixal3D pod (`kami up -p pixal3d`), or Hunyuan3D-2mv "
-                "(front, left, back, right only)")
+        ui.hint(f"`{command}` on a mesh pod (`kami down`, then `kami up -p mesh`)")
 
 
 RELOAD_TIMEOUT = 15 * 60      # the pipelines load again: a few minutes

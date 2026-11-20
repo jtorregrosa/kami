@@ -422,7 +422,7 @@ function blocked(name) {
                el("p", {class: "dim", text: "This page never starts one. To make " + what + ", in a terminal:"}));
     fitting.slice(0, 4).forEach(n => box.append(command("kami up -p " + n)));
   }
-  if (!fitting.length) box.append(command(name === "mesh" ? "kami up -p pixal3d" : "kami up -p views-qwen"));
+  if (!fitting.length) box.append(command(name === "mesh" ? "kami up -p mesh" : "kami up -p views"));
   box.append(el("p", {class: "dim", text: "The library below and the Print stage work without a pod."}));
   return box;
 }

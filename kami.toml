@@ -35,92 +35,20 @@ output_dir = "kami-out"
 max_hours = 4
 idle_minutes = 30
 
-# mesh: image -> textured GLB with TRELLIS.2 (4B, MIT). The README asks for 24 GB.
-# It also loads DINOv3 and RMBG-2.0, both gated: accept their terms on Hugging Face with
-# the account of HF_TOKEN (`kami doctor` checks it).
-[profiles.mesh]
-mesh_model = "microsoft/TRELLIS.2-4B"
-gpus = ["RTX 4090", "L40S", "RTX A6000", "L40", "A100 PCIe 80GB"]
-min_vram_gb = 24
-# TRELLIS.2 keeps its ~16 GB of models in RAM between steps: a 4090 host with 29 GB ran
-# out of memory (OOM) while making a mesh. Only hosts with this much RAM per GPU.
-min_ram_gb = 48
-disk_gb = 60
-# Defaults of `kami mesh` (each is also a flag): texture 1024 / 2048 / 4096, faces
-# after simplification, and whether to remesh TRELLIS.2's raw surface.
-mesh_defaults = { texture_size = 2048, decimation_target = 500000, remesh = true }
-
-# image: text -> image with Z-Image-Turbo (6B, Apache-2.0): 8 steps, no guidance, fits 16 GB.
-[profiles.image]
-image_model = "Tongyi-MAI/Z-Image-Turbo"
-gpus = ["RTX 4090", "RTX A5000", "L40S", "RTX A6000"]
-min_vram_gb = 24
-disk_gb = 60
-image_defaults = { steps = 8, guidance = 0.0, width = 1024, height = 1024 }
-
-# studio: both models on one 48 GB card, for `kami mesh --prompt "..."` (text -> image -> mesh)
-# and for switching between images and meshes without a new pod.
-[profiles.studio]
-extends = "mesh"
-image_model = "Tongyi-MAI/Z-Image-Turbo"
-image_defaults = { steps = 8, guidance = 0.0, width = 1024, height = 1024 }
-gpus = ["L40S", "RTX A6000", "L40", "RTX 6000 Ada", "A100 PCIe 80GB"]
-min_vram_gb = 48
-min_ram_gb = 64          # both models
-disk_gb = 100
-
-# studio-24: the same on a 24 GB card: the model not in use waits on the CPU (offload),
-# so each switch between images and meshes costs some seconds.
-[profiles.studio-24]
-extends = "studio"
-gpus = ["RTX 4090", "RTX A5000"]
-min_vram_gb = 24
-offload = true           # both models wait in RAM: min_ram_gb 64 from studio
-
-# Hunyuan3D-2 (Tencent): image -> textured GLB, and Hunyuan3D-2mv for several named views
-# of one object (`kami mesh front=a.png left=b.png back=c.png`). Its licence (Tencent
-# Hunyuan Community) does NOT apply in the European Union, the United Kingdom and South
-# Korea: read https://huggingface.co/tencent/Hunyuan3D-2/blob/main/LICENSE before enabling.
-# kami refuses these profiles until accept_hunyuan_license = true. They run on the
-# -hunyuan image (the workflow's variant = hunyuan builds it).
+# Two profiles, one per pod of the way from a concept to a print (`kami ui` shows them
+# as its Concept and Mesh stages; Print runs on your PC):
 #
-[profiles.hunyuan]
-mesh_model = "tencent/Hunyuan3D-2"
-accept_hunyuan_license = true
-container = "ghcr.io/jtorregrosa/kami-server:0.1.0-hunyuan"
-gpus = ["RTX 4090", "L40S", "RTX A6000", "L40"]
-min_vram_gb = 24
-min_ram_gb = 48
-disk_gb = 80
-# steps / octree_resolution / guidance of the shape model; faces kept before texturing
-mesh_defaults = { steps = 50, octree_resolution = 380, guidance = 5.0, decimation_target = 40000 }
-
-[profiles.hunyuan-mv]
-extends = "hunyuan"
-mesh_model = "tencent/Hunyuan3D-2mv"
-
-# pixal3d: Pixal3D (TencentARC, MIT, SIGGRAPH 2026), TRELLIS.2 with pixel-aligned
-# conditioning: one picture, or posed views of one object with weights trained for them
-# (`kami mesh front=a.png left=b.png back=c.png right=d.png`, as `kami views` saves
-# them; also front-left, back-right...). ~18 GB on the GPU; its single-view and posed-
-# view pipelines both wait in RAM. Runs on the -pixal3d image (variant = pixal3d).
-[profiles.pixal3d]
-mesh_model = "TencentARC/Pixal3D"
-container = "ghcr.io/jtorregrosa/kami-server:0.1.0-pixal3d"
-gpus = ["RTX 4090", "L40S", "RTX A6000", "L40", "A100 PCIe 80GB"]
-min_vram_gb = 24
-min_ram_gb = 64          # both pipelines in RAM
-disk_gb = 80
-mesh_defaults = { texture_size = 2048, decimation_target = 500000, remesh = true }
-
-# Views of one object from a concept (`kami views "a ceramic owl"`): the front picture
-# first, then a camera LoRA turns the camera around it (left, back, right...), for
-# `kami mesh front=... left=... back=... right=...` on a Hunyuan3D-2mv pod.
+#   kami up -p views   a description -> the front of an object and its sides
+#   kami up -p mesh    those pictures -> a textured mesh (GLB)
 #
-# views-qwen: Z-Image-Turbo makes the front, Qwen-Image-Edit-2511 (20B, Apache-2.0) with
-# fal's Multiple-Angles LoRA (96 camera poses, Apache-2.0) turns it. Qwen-Edit in bf16 is
-# ~57 GB: an 80 GB card, the two models taking turns on it (offload).
-[profiles.views-qwen]
+# The other profiles kami can run are at the end of this file, commented out.
+
+# views: Z-Image-Turbo (6B, Apache-2.0) makes the front from the text, Qwen-Image-Edit-2511
+# (20B, Apache-2.0) with fal's Multiple-Angles LoRA (96 camera poses, Apache-2.0) turns the
+# camera around it (left, back, right, and the diagonals). `kami views "a ceramic owl"`,
+# `kami image "..."` for fronts alone. Qwen-Edit in bf16 is ~57 GB: an 80 GB card, the two
+# models taking turns on it (offload).
+[profiles.views]
 image_model = "Tongyi-MAI/Z-Image-Turbo"
 image_defaults = { steps = 8, guidance = 0.0, width = 1024, height = 1024 }
 views_model = "Qwen/Qwen-Image-Edit-2511"
@@ -132,18 +60,104 @@ min_vram_gb = 80
 min_ram_gb = 96          # both models wait in RAM between turns
 disk_gb = 140
 
+# mesh: Pixal3D (TencentARC, MIT, SIGGRAPH 2026), TRELLIS.2 with pixel-aligned
+# conditioning: one picture, or posed views of one object with weights trained for them
+# (`kami mesh front=a.png left=b.png back=c.png right=d.png`, as `kami views` saves
+# them; also front-left, back-right...). ~18 GB on the GPU; its single-view and posed-
+# view pipelines both wait in RAM. Runs on the -pixal3d image (variant = pixal3d).
+# It also loads DINOv3 and RMBG-2.0, both gated: accept their terms on Hugging Face with
+# the account of HF_TOKEN (`kami doctor` checks it).
+[profiles.mesh]
+mesh_model = "TencentARC/Pixal3D"
+container = "ghcr.io/jtorregrosa/kami-server:0.1.0-pixal3d"
+gpus = ["RTX 4090", "L40S", "RTX A6000", "L40", "A100 PCIe 80GB"]
+min_vram_gb = 24
+min_ram_gb = 64          # both pipelines in RAM
+disk_gb = 80
+mesh_defaults = { texture_size = 2048, decimation_target = 500000, remesh = true }
+
+
+# ---------------------------------------------------------------------------------------
+# Other profiles, off: remove the "# " of a block to use it (`kami up -p <name>`).
+# ---------------------------------------------------------------------------------------
+
+# trellis: image -> textured GLB with TRELLIS.2 (4B, MIT), what Pixal3D is built on. One
+# picture, or several views through an experimental trick. The README asks for 24 GB.
+# TRELLIS.2 keeps its ~16 GB of models in RAM between steps: a 4090 host with 29 GB ran
+# out of memory while making a mesh, hence min_ram_gb.
+#
+# [profiles.trellis]
+# mesh_model = "microsoft/TRELLIS.2-4B"
+# gpus = ["RTX 4090", "L40S", "RTX A6000", "L40", "A100 PCIe 80GB"]
+# min_vram_gb = 24
+# min_ram_gb = 48
+# disk_gb = 60
+# mesh_defaults = { texture_size = 2048, decimation_target = 500000, remesh = true }
+
+# image: text -> image alone with Z-Image-Turbo: 8 steps, no guidance, a 24 GB card.
+# Cheaper than `views` to try many fronts, but it cannot turn the camera.
+#
+# [profiles.image]
+# image_model = "Tongyi-MAI/Z-Image-Turbo"
+# gpus = ["RTX 4090", "RTX A5000", "L40S", "RTX A6000"]
+# min_vram_gb = 24
+# disk_gb = 60
+# image_defaults = { steps = 8, guidance = 0.0, width = 1024, height = 1024 }
+
+# studio: TRELLIS.2 and Z-Image-Turbo on one 48 GB card, for `kami mesh --prompt "..."`
+# (text -> image -> mesh, from a single view). Needs the trellis profile above.
+#
+# [profiles.studio]
+# extends = "trellis"
+# image_model = "Tongyi-MAI/Z-Image-Turbo"
+# image_defaults = { steps = 8, guidance = 0.0, width = 1024, height = 1024 }
+# gpus = ["L40S", "RTX A6000", "L40", "RTX 6000 Ada", "A100 PCIe 80GB"]
+# min_vram_gb = 48
+# min_ram_gb = 64          # both models
+# disk_gb = 100
+
+# studio-24: the same on a 24 GB card: the model not in use waits on the CPU (offload),
+# so each switch between images and meshes costs some seconds. Needs studio.
+#
+# [profiles.studio-24]
+# extends = "studio"
+# gpus = ["RTX 4090", "RTX A5000"]
+# min_vram_gb = 24
+# offload = true           # both models wait in RAM: min_ram_gb 64 from studio
+
+# Hunyuan3D-2 (Tencent): image -> textured GLB, and Hunyuan3D-2mv for several named views
+# of one object. Its licence (Tencent Hunyuan Community) does NOT apply in the European
+# Union, the United Kingdom and South Korea: read
+# https://huggingface.co/tencent/Hunyuan3D-2/blob/main/LICENSE before enabling. kami
+# refuses these profiles until accept_hunyuan_license = true. They run on the -hunyuan
+# image (the workflow's variant = hunyuan builds it).
+#
+# [profiles.hunyuan]
+# mesh_model = "tencent/Hunyuan3D-2"
+# accept_hunyuan_license = true
+# container = "ghcr.io/jtorregrosa/kami-server:0.1.0-hunyuan"
+# gpus = ["RTX 4090", "L40S", "RTX A6000", "L40"]
+# min_vram_gb = 24
+# min_ram_gb = 48
+# disk_gb = 80
+# # steps / octree_resolution / guidance of the shape model; faces kept before texturing
+# mesh_defaults = { steps = 50, octree_resolution = 380, guidance = 5.0, decimation_target = 40000 }
+#
+# [profiles.hunyuan-mv]
+# extends = "hunyuan"
+# mesh_model = "tencent/Hunyuan3D-2mv"
+
 # views-flux: FLUX.2 [dev] makes the front and turns it, with lovis93's Multi-Angles LoRA
 # v2 (72 camera poses, OpenRAIL-M). FLUX.2 [dev] is NON-COMMERCIAL (FLUX [dev] licence).
-# Tried on an L40: a fine front, but the LoRA (all its layers loaded) barely acts through
-# diffusers, even at lora_scale 3: left and back came out as the front. Use views-qwen.
-# The NF4 (4-bit) repo fits a 48 GB card; for full bf16 use
-# views_model = "black-forest-labs/FLUX.2-dev" (gated: accept it on Hugging Face) on an
-# 80 GB card with offload, or more.
-[profiles.views-flux]
-views_model = "diffusers/FLUX.2-dev-bnb-4bit"
-views_lora = "lovis93/Flux-2-Multi-Angles-LoRA-v2/flux-multi-angles-v2-72poses-fal.safetensors"
-views_defaults = { steps = 28, guidance = 4.0, lora_scale = 0.9 }
-gpus = ["L40S", "RTX A6000", "L40", "RTX 6000 Ada", "A100 PCIe 80GB"]
-min_vram_gb = 48
-min_ram_gb = 64
-disk_gb = 60           # ~34 GB of weights
+# Tried on an L40: a fine front, but the LoRA barely acts through diffusers, even at
+# lora_scale 3: left and back came out as the front. The NF4 (4-bit) repo fits a 48 GB
+# card; for full bf16 use views_model = "black-forest-labs/FLUX.2-dev" (gated) on 80 GB.
+#
+# [profiles.views-flux]
+# views_model = "diffusers/FLUX.2-dev-bnb-4bit"
+# views_lora = "lovis93/Flux-2-Multi-Angles-LoRA-v2/flux-multi-angles-v2-72poses-fal.safetensors"
+# views_defaults = { steps = 28, guidance = 4.0, lora_scale = 0.9 }
+# gpus = ["L40S", "RTX A6000", "L40", "RTX 6000 Ada", "A100 PCIe 80GB"]
+# min_vram_gb = 48
+# min_ram_gb = 64
+# disk_gb = 60           # ~34 GB of weights

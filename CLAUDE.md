@@ -158,6 +158,13 @@ and Qwen follow it (flat colours, base), and whether `kami print` then gives cle
 colours than the glossy owl, is to be compared on the next `views-qwen` pod, same concept
 and seed, with and without `--as-written`.
 
+Profiles in the shipped `kami.toml` (2026-11-20): two are active, `views` (Z-Image-Turbo +
+Qwen-Image-Edit, was `views-qwen`) and `mesh` (Pixal3D, was `pixal3d`, the default). The
+rest are commented out at the end of the file: `trellis` (TRELLIS.2, was `mesh`), `image`,
+`studio`, `studio-24`, `hunyuan`, `hunyuan-mv`, `views-flux`. Notes above written before
+that use the old names. `kami init`'s template in config.py still writes a TRELLIS.2
+`mesh` profile.
+
 ## Working notes
 
 - The user often writes in Spanish; reply in the language they use.

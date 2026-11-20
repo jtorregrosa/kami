@@ -107,7 +107,7 @@ Or let `mesh` / `image` bring the pod up themselves:
 
 ```powershell
 kami mesh chair.jpg lamp.png --up                     # several images, one pod
-kami up -p studio                                     # both models on one 48 GB card
+kami up -p studio                                     # both models on one 48 GB card (commented out in kami.toml)
 kami image "a ceramic owl, studio light" -n 4 --seed 7
 kami mesh --prompt "a ceramic owl, studio light"      # text -> image -> mesh
 ```
@@ -139,7 +139,7 @@ kami mesh front=a.png left=b.png back=c.png -p hunyuan-mv         # Hunyuan3D-2m
 - **Hunyuan3D-2mv** is trained for it, with named views: `front`, `left`, `back`, `right`
   (`VIEW=IMAGE`; unnamed ones take the free names in that order). Its texture is painted
   from the front view. See the licence note below before using it.
-- **Pixal3D** (`-p pixal3d`, TencentARC, MIT) is TRELLIS.2 with pixel-aligned
+- **Pixal3D** (`-p mesh`, TencentARC, MIT) is TRELLIS.2 with pixel-aligned
   conditioning and weights trained for posed views: name them by where the camera is
   (`front`, `left`, `back`, `right`, `front-left`, `back-right`...; one must be `front`,
   unnamed ones take the free names in that order). The views are cut out and framed
@@ -154,15 +154,15 @@ kami mesh front=a.png left=b.png back=c.png -p hunyuan-mv         # Hunyuan3D-2m
 No photos of the back? `kami views` makes them: a front picture of the concept, then an
 image-editing model with a camera LoRA turns the camera around it. The pictures it saves
 (`owl-front.png`, `owl-left.png`, `owl-back.png`, `owl-right.png`) go straight into
-`kami mesh` on a Hunyuan3D-2mv pod (it prints the command):
+`kami mesh` on a mesh pod (it prints the command):
 
 ```powershell
-kami up -p views-qwen                                  # or views-flux
+kami up -p views
 kami views "a ceramic owl" --seed 7                    # front + left, back, right
 kami views --front owl.png                             # start from your own front picture
 kami views "a robot" --angles left back right front-left back-right
 kami down
-kami up -p hunyuan-mv
+kami up -p mesh
 kami mesh front=kami-out/a-ceramic-owl-front.png left=kami-out/a-ceramic-owl-left.png back=kami-out/a-ceramic-owl-back.png right=kami-out/a-ceramic-owl-right.png
 ```
 
@@ -170,10 +170,10 @@ Two profiles, to compare which turns the camera better:
 
 | Profile | Front picture | Turns the camera | GPU |
 |---|---|---|---|
-| `views-qwen` | Z-Image-Turbo | Qwen-Image-Edit-2511 + fal's Multiple-Angles LoRA (96 poses) | 80 GB |
+| `views` | Z-Image-Turbo | Qwen-Image-Edit-2511 + fal's Multiple-Angles LoRA (96 poses) | 80 GB |
 | `views-flux` | FLUX.2 [dev] | FLUX.2 [dev] (4-bit) + lovis93's Multi-Angles LoRA v2 (72 poses) | 48 GB |
 
-`views-qwen` is the one that works: on a test concept its four views kept the same
+`views` is the one that works: on a test concept its four views kept the same
 object (shape, glaze, proportions) and gave it a plausible back, in ~5 minutes on an
 A100. `views-flux` made a finer front, but its camera LoRA barely acts through diffusers
 (left and back came out as the front), so it is kept only to try other LoRAs.
@@ -198,8 +198,8 @@ not match the front: look at them before making the mesh.
   the colours of your own; changing colours redraws at once. It runs on your PC, so it
   works with no pod.
 
-The page opens on the stage the active pod serves (a `views-qwen` pod on Concept, a
-`pixal3d` pod on Mesh, no pod on Print), and the header says what the pod is, what it
+The page opens on the stage the active pod serves (a `views` pod on Concept, a
+`mesh` pod on Mesh, no pod on Print), and the header says what the pod is, what it
 costs, how much it has cost and when the guard deletes it. A stage the pod does not
 serve says which `kami up -p ...` gets you there; the page never starts a pod itself.
 Below, the jobs on the pod (stage and progress, the queue, also those sent from a
@@ -307,14 +307,26 @@ some MB.
 
 ## Profiles
 
-A profile names the models the pod loads and the GPUs to try, in order:
+A profile names the models the pod loads and the GPUs to try, in order. `kami.toml`
+has two, one per pod of the way from a concept to a print:
 
 | Profile | Models | GPUs | For |
 |---|---|---|---|
-| `mesh` (default) | TRELLIS.2-4B | 24 GB+ (RTX 4090, L40S, A6000...) | image → mesh |
-| `image` | Z-Image-Turbo | 24 GB (RTX 4090, A5000...) | text → image |
-| `studio` | both | 48 GB (L40S, A6000...) | `mesh --prompt`, mixing both |
-| `studio-24` | both, `offload = true` | 24 GB | the same, cheaper; each switch takes seconds |
+| `views` | Z-Image-Turbo + Qwen-Image-Edit-2511 | 80 GB (A100, H100) | text → the front of an object and its sides |
+| `mesh` (default) | Pixal3D | 24 GB+ (RTX 4090, L40S, A6000...) | those pictures → mesh |
+
+The others it can run are in `kami.toml` too, commented out; uncomment a block to use it:
+
+| Profile | Models | GPUs | For |
+|---|---|---|---|
+| `trellis` | TRELLIS.2-4B | 24 GB+ | image → mesh, the model Pixal3D builds on |
+| `image` | Z-Image-Turbo | 24 GB (RTX 4090, A5000...) | text → image alone, cheaply |
+| `studio` | TRELLIS.2 + Z-Image-Turbo | 48 GB (L40S, A6000...) | `mesh --prompt`, mixing both |
+| `studio-24` | the same, `offload = true` | 24 GB | cheaper; each switch takes seconds |
+| `hunyuan`, `hunyuan-mv` | Hunyuan3D-2 | 24 GB+ | meshes; licence excludes the EU, UK and South Korea |
+| `views-flux` | FLUX.2 [dev] | 48 GB | views; its camera LoRA barely acts |
+
+The examples below that name one of these (`-p studio`, `-p hunyuan-mv`) need it uncommented.
 
 ```toml
 [profiles.mesh]
@@ -389,9 +401,9 @@ kami itself is MIT. The models have their own terms. Check them for your use:
   refuses a profile with a Hunyuan3D-2 model until it says `accept_hunyuan_license = true`:
   set it only if the licence covers you. Those profiles run on the `-hunyuan` image
   (`docker/Dockerfile.hunyuan`, the workflow's `variant = hunyuan`).
-- **Pixal3D** (`pixal3d`): MIT; it loads DINOv3 and RMBG-2.0 as TRELLIS.2 does (their
+- **Pixal3D** (`mesh`): MIT; it loads DINOv3 and RMBG-2.0 as TRELLIS.2 does (their
   terms above), NAF (Apache-2.0) and natten (MIT).
-- **Qwen-Image-Edit-2511** (`views-qwen`): Apache-2.0; fal's Multiple-Angles LoRA:
+- **Qwen-Image-Edit-2511** (`views`): Apache-2.0; fal's Multiple-Angles LoRA:
   Apache-2.0.
 - **FLUX.2 [dev]** (`views-flux`): **FLUX [dev] Non-Commercial License**; lovis93's
   Multi-Angles LoRA v2: CreativeML OpenRAIL-M.
