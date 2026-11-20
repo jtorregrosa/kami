@@ -132,10 +132,11 @@ kami mesh front=a.png left=b.png back=c.png -p hunyuan-mv         # Hunyuan3D-2m
 ```
 
 - **TRELLIS.2** was trained on single images. kami adds the tuning-free trick of TRELLIS
-  (1)'s `run_multi_image`: the sampler sees one view per step (`stochastic`, default)
-  or the average of all of them (`multidiffusion`, as many times slower as views). It is
-  **experimental**: views with the same light, size and centring help; mismatched ones
-  make it worse.
+  (1)'s `run_multi_image`: the sampler sees the average of all the views at every step
+  (`multidiffusion`, the default: it keeps small painted details sharp) or one view per
+  step (`stochastic`). It assumes no camera for each view, so it takes pictures drawn
+  anywhere (`kami up -p trellis`); views with the same light, size and centring still
+  help.
 - **Hunyuan3D-2mv** is trained for it, with named views: `front`, `left`, `back`, `right`
   (`VIEW=IMAGE`; unnamed ones take the free names in that order). Its texture is painted
   from the front view. See the licence note below before using it.

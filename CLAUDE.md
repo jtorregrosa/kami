@@ -219,8 +219,10 @@ views that are not there make it double things: a gecko whose front and back wer
 from above came out with repeated features and a straightened tail; with those two
 retaken at ground level it was cleaner, the tail still straight. From one picture
 (three-quarter front) Pixal3D was clean. TRELLIS.2 with `--views` assumes no camera and
-gave the best gecko and caterpillar from the same four pictures (stochastic a little
-better than multidiffusion): the first run of TRELLIS.2 multiview on a GPU. So: views
+gave the best gecko and caterpillar from the same four pictures: the first run of
+TRELLIS.2 multiview on a GPU. Of its two modes, multidiffusion kept painted details
+(the gecko's spots, its eye) sharp where stochastic blurred them, with a darker texture;
+it is the default since, on that one comparison. So: views
 from `kami views` (Qwen, posed) -> Pixal3D; pictures from anywhere -> the `trellis`
 profile, or one picture. Pixal3D at 1536 with four views ran out of memory on an L40S
 (45 GiB), hence `PIXAL_LOW_VRAM_BELOW_GIB = 60`. `kami up -p mesh` took 7 to 16 minutes.

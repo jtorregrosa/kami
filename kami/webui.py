@@ -415,7 +415,7 @@ def build_bodies(request: dict, hint: str = "", folder: Path | None = None) -> l
         if len(images) > MAX_IMAGES:
             raise ValueError(f"At most {MAX_IMAGES} images at once")
         params = _params(request.get("params"), MESH_PARAMS)
-        if params.get("multiview_mode", "stochastic") not in MULTIVIEW_MODES:
+        if params.get("multiview_mode", MULTIVIEW_MODES[0]) not in MULTIVIEW_MODES:
             raise ValueError(f"multiview_mode must be one of {', '.join(MULTIVIEW_MODES)}")
         views = request.get("views") is True
         if views and len(images) > MAX_VIEWS:

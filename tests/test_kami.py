@@ -3200,3 +3200,11 @@ class PrintHintTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "front_hint must be text"):
                 server.check_views_params({"front_hint": 3}, has_front=False)
 
+
+class MultiviewDefault(unittest.TestCase):
+    def test_every_view_at_every_step_unless_asked_otherwise(self):
+        from kami import server
+        # the gecko's spots stayed sharp this way and blurred with one view a step
+        self.assertEqual(server.MESH_DEFAULTS.get("multiview_mode"), "multidiffusion")
+        self.assertEqual(set(server.MULTIVIEW_MODES), set(webui.MULTIVIEW_MODES))
+

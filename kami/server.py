@@ -98,8 +98,11 @@ elif MESH_BACKEND == "pixal3d":
     MESH_DEFAULTS = {"texture_size": 2048, "decimation_target": 500000, "remesh": True,
                      "resolution": None, "fov": 20.0}
 else:
+    # multidiffusion: every view has its say at every step. From the same four pictures
+    # of a gecko it kept the spots on its back round and apart and its eye whole, where
+    # stochastic (one view a step) blurred them into each other; the texture came darker.
     MESH_DEFAULTS = {"texture_size": 2048, "decimation_target": 500000, "remesh": True,
-                     "multiview_mode": "stochastic"}
+                     "multiview_mode": "multidiffusion"}
 MESH_DEFAULTS.update(json.loads(os.environ.get("KAMI_MESH_DEFAULTS") or "{}"))
 NVDIFFRAST_LIMIT = 16777216     # faces nvdiffrast can rasterise (TRELLIS.2's example)
 # Views of one object a mesh job may carry: Hunyuan3D-2mv knows these four (its
@@ -691,7 +694,8 @@ def trellis_multiview(pipe, views, mode):
     """TRELLIS.2 conditioned on several views of one object -- the tuning-free trick of
     TRELLIS (1)'s run_multi_image, which TRELLIS.2 does not ship: the image features of
     every view go through the samplers, and at each step the flow model sees one view
-    in turn ("stochastic") or all of them, averaged ("multidiffusion", N times slower).
+    in turn ("stochastic") or all of them, averaged ("multidiffusion", the default; N
+    model calls a step).
     The model was trained on single images: consistent views help, mismatched ones hurt."""
     if mode not in MULTIVIEW_MODES:
         raise ValueError(f"multiview_mode must be one of {', '.join(MULTIVIEW_MODES)}")

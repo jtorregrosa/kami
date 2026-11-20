@@ -640,7 +640,7 @@ const HELP = {
   negative: "What to keep out of the picture: each kind of print brings its own list. Read by models running with guidance above 0 (Z-Image); Z-Image-Turbo ignores it.",
   texture: "The side of the mesh's texture, in pixels. Larger is sharper, and a bigger file.",
   faces: "Triangles kept when the mesh is simplified. More keeps finer detail, and a bigger file.",
-  multiview: "How TRELLIS.2 uses several views: stochastic follows one per step, multidiffusion averages them.",
+  multiview: "How TRELLIS.2 uses several views. Multidiffusion: every view has its say at every step, which keeps small painted details sharp. Stochastic: one view per step, brighter but blurrier where the views disagree.",
   remesh: "Rebuilds the model's raw surface into a cleaner one. Off keeps its own triangles.",
   height: "How tall the print is. The other two sizes follow.",
   base: "The lowest part of the model, as a share of its height, is pressed flat so it stands on the plate. 0 leaves it as it is.",
@@ -1003,7 +1003,8 @@ function meshControls() {
     el("div", {class: "cols"}, field("Texture", texture, HELP.texture),
       field("Faces", number("decimation_target", md.decimation_target ?? "default", {min: "1000", step: "1000"}), HELP.faces),
       meshMode === "views" && s.multiview_modes
-        ? field("Several views", el("select", {name: "multiview_mode"}, s.multiview_modes.map(m => new Option(m, m))), HELP.multiview) : null),
+        ? field("Several views", el("select", {name: "multiview_mode"}, s.multiview_modes.map(m =>
+            new Option(m + (m === md.multiview_mode ? " (default)" : ""), m, false, m === md.multiview_mode))), HELP.multiview) : null),
     check("remesh", md.remesh !== false, "Remesh the surface", HELP.remesh)));
   sections.push(group("Repeating a result", null,
     el("div", {class: "cols"}, field("Seed", number("seed", "random"), HELP.seed))));

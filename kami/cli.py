@@ -2183,8 +2183,8 @@ def main(argv: list[str] | None = None) -> None:
                    help="one mesh out of all the images: views of the same object (experimental "
                         "on TRELLIS.2; Hunyuan3D-2mv is made for it)")
     p.add_argument("--view-mode", choices=("stochastic", "multidiffusion"),
-                   help="TRELLIS.2 with --views: one view per sampling step (stochastic, default) "
-                        "or all of them averaged (multidiffusion, as many times slower as views)")
+                   help="TRELLIS.2 with --views: all of them averaged at every sampling step "
+                        "(multidiffusion, default: sharper details) or one view per step (stochastic)")
     p.add_argument("--no-texture", action="store_true", help="Hunyuan3D-2: the bare shape, no texture")
     p.add_argument("--prompt", help="make the image first from this prompt (needs an image model)")
     p.add_argument("--seed", type=int, help="random seed, for repeatable results")
