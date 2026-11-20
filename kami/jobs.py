@@ -167,6 +167,27 @@ def download(url: str, api_key: str, job: dict, out_dir: Path) -> list[Path]:
     return saved
 
 
+# What is added to a prompt so the picture is of something a printer can make, and
+# `kami print` can colour: it stands, it is one thick piece, and its colours are few and
+# flat, with no light painted into them (a highlight would become a filament).
+# Said in the positive: the fast image models run without a negative prompt.
+# {colors} is the number of filaments. `print_hint` in kami.toml replaces it; "" turns it off.
+PRINT_HINT = ("designed as a collectible vinyl toy figure for 3D printing, one solid piece "
+              "standing upright on a wide flat base, chunky thick rounded shapes, every part "
+              "attached to the body, {colors} flat solid colours in large clearly separated "
+              "areas with crisp edges, matte uniform surfaces, flat even lighting")
+PRINT_COLORS = 4                 # one AMS; `kami print --colors` has the same default
+MAX_PRINT_COLORS = 16
+
+
+def printable(prompt: str, hint: str, colors: int | None = None) -> str:
+    """The prompt with the printing hint after it (none if `hint` is empty)."""
+    hint = (hint or "").strip()
+    if not hint:
+        return prompt
+    return f"{prompt}, {hint.replace('{colors}', str(colors or PRINT_COLORS))}"
+
+
 def free_path(path: Path) -> Path:
     """`path`, or the first `stem-N.suffix` next to it that does not exist yet."""
     if not path.exists():

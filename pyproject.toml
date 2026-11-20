@@ -5,6 +5,9 @@ description = "Rent a GPU only while you use it: image -> 3D mesh (TRELLIS.2) an
 requires-python = ">=3.11"
 dependencies = []
 
+[project.optional-dependencies]
+print = ["numpy", "pillow", "scipy", "scikit-image"]     # `kami print` only
+
 [project.scripts]
 kami = "kami.cli:main"
 

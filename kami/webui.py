@@ -1,8 +1,10 @@
-"""`kami ui`: a local web page to make meshes and images and browse the results.
+"""`kami ui`: a local web page to go from a concept to a mesh to a print.
 
-A small HTTP server on 127.0.0.1 serves the page, the files of the output folder, and a
-JSON API the page uses: the pod's state, the jobs sent from the page, and the actions
-(send jobs, delete the pod). kami relays jobs to the pod itself, so the pod's API key
+The page has three stages, Concept (text or a picture -> the views of an object), Mesh
+(views -> GLB) and Print (GLB -> 3MF, on this PC), and opens on the one the active pod
+serves. A small HTTP server on 127.0.0.1 serves the page, the files of the output folder
+(the library, grouped by object), and a JSON API the page uses: the pod's state, the jobs
+sent from the page, and the actions (send jobs, prepare a print, delete the pod). kami relays jobs to the pod itself, so the pod's API key
 never reaches the browser. It never brings a pod up: that stays a deliberate `kami up`.
 
 Only this PC can reach it (127.0.0.1, and the Host header is checked against DNS
@@ -35,8 +37,10 @@ from .config import ConfigError
 
 MESH_SUFFIXES = (".glb",)
 IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg", ".webp")
+PRINT_SUFFIXES = (".3mf",)
+RESULT_SUFFIXES = (*MESH_SUFFIXES, *IMAGE_SUFFIXES, *PRINT_SUFFIXES)
 TYPES = {".glb": "model/gltf-binary", ".png": "image/png", ".jpg": "image/jpeg",
-         ".jpeg": "image/jpeg", ".webp": "image/webp"}
+         ".jpeg": "image/jpeg", ".webp": "image/webp", ".3mf": "model/3mf"}
 MODEL_VIEWER = "https://cdn.jsdelivr.net/npm/@google/model-viewer@3.5.0/dist/model-viewer.min.js"
 
 MAX_BODY = 200 * 1024 * 1024     # bytes of a POST (several images, base64)
@@ -44,6 +48,7 @@ MAX_IMAGES = 20                  # images in one mesh request
 MAX_COUNT = 8                    # images of one prompt
 MAX_ACTIVE = 16                  # jobs in flight from the page at once
 KEPT_JOBS = 40                   # finished jobs listed on the page
+MAX_THUMBS = 200                 # mesh thumbnails kept in memory
 STATUS_TTL = 10                  # seconds the pod's state is cached (provider API calls)
 JOBS_TTL = 2                     # seconds the pod's job listing is cached
 PROGRESS_FIELDS = ("stage", "stage_label", "step", "steps", "progress")
@@ -58,80 +63,149 @@ IMAGE_PARAMS = {"seed": int, "steps": int, "guidance": float, "width": int, "hei
 VIEWS_PARAMS = {"seed": int, "steps": int, "guidance": float, "lora_scale": float}
 
 
-# --- results (the gallery) ---
+# --- results (the library) ---
 
 def results(folder: Path) -> list[Path]:
-    """The meshes and images directly in `folder`, newest first."""
+    """The meshes, images and 3MFs in `folder` and in the folders directly inside it
+    (where one tidies them by hand), newest first."""
     if not folder.is_dir():
         return []
-    files = [p for p in folder.iterdir()
-             if p.is_file() and p.suffix.lower() in (*MESH_SUFFIXES, *IMAGE_SUFFIXES)]
+    files = []
+    for entry in folder.iterdir():
+        inside = [entry] if entry.is_file() else (
+            list(entry.iterdir()) if entry.is_dir() and not entry.name.startswith(".") else [])
+        files += [p for p in inside if p.is_file() and p.suffix.lower() in RESULT_SUFFIXES]
     return sorted(files, key=lambda p: (p.stat().st_mtime, p.name), reverse=True)
 
 
 def signature(folder: Path) -> str:
-    """Changes when a result is added, replaced or removed (the gallery refreshes then).
+    """Changes when a result is added, replaced or removed (the library refreshes then).
     A hash, so no file name ends up in the page's script."""
-    listing = ";".join(f"{p.name}:{p.stat().st_mtime_ns}:{p.stat().st_size}" for p in results(folder))
+    listing = ";".join(f"{p.relative_to(folder).as_posix()}:{p.stat().st_mtime_ns}:{p.stat().st_size}"
+                       for p in results(folder))
     return hashlib.sha256(listing.encode("utf-8", "surrogateescape")).hexdigest()[:16]
 
 
-def cards(folder: Path) -> list[dict]:
-    """One card per result. A mesh and the image of the same name (text-to-mesh makes
-    both) share one card: the image is shown as the mesh's source."""
-    files = results(folder)
-    meshes = {p.stem: p for p in files if p.suffix.lower() in MESH_SUFFIXES}
-    out = []
-    for p in files:
-        is_mesh = p.suffix.lower() in MESH_SUFFIXES
-        if not is_mesh and p.stem in meshes:
-            continue                                  # shown with its mesh
-        source = None
-        if is_mesh:
-            source = next((q for q in files if q.stem == p.stem and q is not p
-                           and q.suffix.lower() in IMAGE_SUFFIXES), None)
+def resolve(folder: Path, name) -> Path | None:
+    """The result `name` ("owl.glb", "pixal3d/owl.glb") as a file, or None: a plain name
+    or one folder deep, of a kind the page shows, and nothing else on the disk."""
+    if not isinstance(name, str) or "\\" in name:
+        return None
+    parts = name.split("/")
+    if not 1 <= len(parts) <= 2 or any(p in ("", ".", "..") or p.startswith(".") for p in parts):
+        return None
+    target = folder.joinpath(*parts)
+    return target if target.suffix.lower() in TYPES and target.is_file() else None
+
+
+# "owl-left.png", "owl-front-2.png": a view of "owl" (the 2 is a later take of it)
+VIEW_OF = re.compile(r"^(.+?)-(%s)(?:-\d+)?$" % "|".join(sorted(jobs.VIEW_ANGLES, key=len, reverse=True)))
+
+
+def objects(folder: Path) -> list[dict]:
+    """The library as the things being made, newest first: an object is the pictures of
+    its sides, its mesh and its 3MF, found by name (owl-front.png, owl-left.png,
+    owl-front.glb and owl.3mf are all "owl"). The newest take of each view counts."""
+    found: dict[str, dict] = {}
+    for p in results(folder):
+        rel = p.relative_to(folder).as_posix()
+        sub = rel.rpartition("/")[0]
+        suffix = p.suffix.lower()
+        match = VIEW_OF.match(p.stem)
+        base = match.group(1) if match else p.stem
+        key = f"{sub}/{base}" if sub else base
         stat = p.stat()
-        out.append({"name": p.name, "kind": "mesh" if is_mesh else "image",
-                    "size": stat.st_size, "mtime": stat.st_mtime,
-                    "source": source.name if source else None})
-    return out
+        obj = found.setdefault(key, {"key": key, "name": base, "folder": sub, "views": {},
+                                     "images": [], "meshes": [], "prints": [], "mtime": 0})
+        obj["mtime"] = max(obj["mtime"], stat.st_mtime)
+        if suffix in IMAGE_SUFFIXES:
+            if match:
+                obj["views"].setdefault(match.group(2), rel)      # newest first: the first stays
+            else:
+                obj["images"].append(rel)
+        else:
+            obj["meshes" if suffix in MESH_SUFFIXES else "prints"].append(
+                {"file": rel, "size": stat.st_size})
+    return sorted(found.values(), key=lambda o: (o["mtime"], o["key"]), reverse=True)
 
 
-def _size(n: int) -> str:
-    return f"{n / 1e6:.1f} MB" if n >= 1e5 else f"{n / 1e3:.0f} kB"
+# --- printing (on this PC) ---
 
+class Printer:
+    """`kami print` for the page: the mesh of an object made printable, shown painted
+    before the 3MF is saved. The slow half (the solid on the plate) is kept between
+    requests, so changing colours answers at once."""
 
-def _card(c: dict) -> str:
-    url = "files/" + quote(c["name"])
-    name = html.escape(c["name"])
-    when = time.strftime("%Y-%m-%d %H:%M", time.localtime(c["mtime"]))
-    if c["kind"] == "mesh":
-        poster = f' poster="files/{quote(c["source"])}"' if c["source"] else ""
-        media = (f'<model-viewer src="{url}"{poster} camera-controls auto-rotate '
-                 f'shadow-intensity="1" exposure="1" loading="lazy" '
-                 f'alt="{name}"></model-viewer>')
-        badge = "GLB"
-    else:
-        media = f'<img src="{url}" alt="{name}" loading="lazy">'
-        badge = "PNG" if c["name"].lower().endswith(".png") else "IMG"
-    source = ""
-    if c["source"]:
-        source = (f' · <a href="files/{quote(c["source"])}" target="_blank">'
-                  f'{html.escape(c["source"])}</a>')
-    return (f'<figure class="card {c["kind"]}" data-name="{name}">'
-            f'<div class="media">{media}<button type="button" class="grow" title="Full size" '
-            f'aria-label="Full size">&#x2922;</button></div>'
-            f'<figcaption><span class="badge">{badge}</span>'
-            f'<a class="name" href="{url}" download>{name}</a>'
-            f'<span class="meta">{_size(c["size"])} · {when}{source}</span></figcaption>'
-            f'</figure>')
+    def __init__(self, folder: Path):
+        self.folder = folder
+        self.lock = threading.Lock()
+        self.key = None
+        self.prepared = None
+        self.preview = (None, b"")               # (id, the painted GLB)
+        self.thumbs: dict[tuple, bytes | None] = {}
 
+    def thumbnail(self, name: str) -> bytes | None:
+        """A small PNG of the mesh `name`, made once per file; None when it cannot be
+        (not a mesh of the library, a GLB that does not load, no numpy on this PC)."""
+        source = resolve(self.folder, name)
+        if source is None or source.suffix.lower() not in MESH_SUFFIXES:
+            return None
+        key = (name, source.stat().st_mtime_ns)
+        if key not in self.thumbs:
+            try:
+                from . import printing
+                picture = printing.thumbnail(source)
+            except Exception:                     # a picture is a nicety: never an error page
+                picture = None
+            with self.lock:
+                if len(self.thumbs) >= MAX_THUMBS:
+                    self.thumbs.clear()
+                self.thumbs[key] = picture
+        return self.thumbs[key]
 
-def gallery(folder: Path) -> str:
-    """The cards' HTML (the page swaps it in when the folder changes)."""
-    return "".join(_card(c) for c in cards(folder)) or (
-        '<p class="empty">No results yet. Make one above, or with <code>kami mesh photo.png</code> '
-        'in a terminal: it shows up here.</p>')
+    def run(self, request: dict) -> dict:
+        """Raises ValueError (a bad request) or ConfigError (what `kami print` would say)."""
+        from . import printing                    # numpy and friends: only when printing
+        if not isinstance(request, dict):
+            raise ValueError("The request must be a JSON object")
+        source = resolve(self.folder, request.get("file"))
+        if source is None or source.suffix.lower() not in MESH_SUFFIXES:
+            raise ValueError("Pick a mesh (.glb) from the library")
+        geometry = _params({k: request.get(k) for k in ("height", "base", "detail", "rebuild")},
+                           {"height": float, "base": float, "detail": float, "rebuild": str})
+        colors = request.get("colors")
+        if colors is not None and (isinstance(colors, bool) or not isinstance(colors, int)):
+            raise ValueError("colors must be a whole number")
+        palette = request.get("palette")
+        if palette is not None:
+            if not isinstance(palette, list) or not all(isinstance(c, str) for c in palette):
+                raise ValueError("palette must be a list of colours like #1a4fa0")
+            palette = printing.parse_palette(",".join(palette))
+        key = (str(source), source.stat().st_mtime_ns, tuple(sorted(geometry.items())))
+        with self.lock:
+            if key != self.key:
+                self.prepared = printing.prepare(
+                    source, height=geometry.get("height", 80.0), base=geometry.get("base", 2.0),
+                    detail=geometry.get("detail", printing.DETAIL),
+                    rebuilding=geometry.get("rebuild", "auto"))
+                self.key = key
+            mesh, report = self.prepared
+            labels, swatches, share = printing.paint(mesh, colors=colors or jobs.PRINT_COLORS,
+                                                     palette=palette)
+            saved = None
+            if request.get("save") is True:
+                target = jobs.free_path(source.with_suffix(".3mf"))
+                printing.write_3mf(target, mesh, labels, swatches, source.stem)
+                saved = target.relative_to(self.folder).as_posix()
+            done = printing.describe(None, mesh, report, swatches, share)
+            self.preview = (secrets.token_urlsafe(8), printing.preview_glb(mesh, labels, swatches))
+        return {"preview": f"preview/{self.preview[0]}.glb", "saved": saved,
+                "size": [round(x, 1) for x in done.size], "triangles": done.triangles,
+                "base_area": round(done.base_area), "closed": report.closed,
+                "rebuilt": report.rebuilt, "detail": round(report.detail, 2),
+                "cavities": report.cavities, "fragments": report.fragments,
+                "colors": [{"hex": c, "share": round(s, 4)} for c, s in done.colors],
+                "warnings": printing.warnings(done)}
 
 
 # --- jobs sent from the page ---
@@ -186,7 +260,7 @@ class Work:
 
     def create(self, request: dict) -> list[dict]:
         """Check a request from the page and start its jobs. Raises ValueError."""
-        bodies = build_bodies(request)
+        bodies = build_bodies(request, getattr(self.backend, "print_hint", ""), self.folder)
         if self.active() + len(bodies) > MAX_ACTIVE:
             raise ValueError(f"Too many jobs in flight (at most {MAX_ACTIVE}): wait for some to finish")
         created = []
@@ -270,8 +344,47 @@ def _prompt(request: dict) -> str:
     return prompt.strip()
 
 
-def build_bodies(request: dict) -> list[tuple[str, dict]]:
-    """(label, kami-server job body) for each job a page request asks for."""
+def _sent(request: dict, prompt: str, hint: str) -> str:
+    """The prompt as the pod gets it: with the printing hint, unless the request says
+    `"print_hint": false`; `"colors"` is how many filaments the hint asks for."""
+    if request.get("print_hint") is False:
+        return prompt
+    colors = request.get("colors")
+    if colors is not None and (isinstance(colors, bool) or not isinstance(colors, int)
+                               or not 1 <= colors <= jobs.MAX_PRINT_COLORS):
+        raise ValueError(f"colors must be 1 to {jobs.MAX_PRINT_COLORS}")
+    return jobs.printable(prompt, hint, colors)
+
+
+def _picture(item, folder: Path | None) -> tuple[str, bytes]:
+    """(name, bytes) of a picture the page sends: {name, data} uploaded as base64, or
+    {file} naming one already in the library. Raises ValueError."""
+    if not isinstance(item, dict):
+        raise ValueError("Each image must be {name, data} or {file}")
+    if item.get("file") is not None:
+        source = resolve(folder, item["file"]) if folder else None
+        if source is None or source.suffix.lower() not in IMAGE_SUFFIXES:
+            raise ValueError(f"{item['file']}: not a picture in the library")
+        name, data = source.name, source.read_bytes()
+    else:
+        name = str(item.get("name") or "image")
+        if Path(name).suffix.lower() not in jobs.IMAGE_SUFFIXES:
+            raise ValueError(f"{name}: not an image kami can send ({', '.join(jobs.IMAGE_SUFFIXES)})")
+        try:
+            data = base64.b64decode(item.get("data") or "", validate=True)
+        except (binascii.Error, ValueError, TypeError):
+            raise ValueError(f"{name}: the image data is not valid base64") from None
+    if not data:
+        raise ValueError(f"{name}: the image is empty")
+    if len(data) > jobs.MAX_IMAGE_BYTES:
+        raise ValueError(f"{name}: over {jobs.MAX_IMAGE_BYTES // 2**20} MiB, resize it first")
+    return name, data
+
+
+def build_bodies(request: dict, hint: str = "", folder: Path | None = None) -> list[tuple[str, dict]]:
+    """(label, kami-server job body) for each job a page request asks for. `hint` is the
+    printing hint its prompts get (labels and file names keep the prompt as written);
+    `folder` is the library its pictures may come from."""
     if not isinstance(request, dict):
         raise ValueError("The request must be a JSON object")
     kind = request.get("kind")
@@ -289,20 +402,7 @@ def build_bodies(request: dict) -> list[tuple[str, dict]]:
             raise ValueError(f"At most {MAX_VIEWS} views of one object")
         bodies, parts = [], []
         for image in images:
-            if not isinstance(image, dict):
-                raise ValueError("Each image must be {name, data}")
-            name = str(image.get("name") or "image")
-            suffix = Path(name).suffix.lower()
-            if suffix not in jobs.IMAGE_SUFFIXES:
-                raise ValueError(f"{name}: not an image kami can send ({', '.join(jobs.IMAGE_SUFFIXES)})")
-            try:
-                data = base64.b64decode(image.get("data") or "", validate=True)
-            except (binascii.Error, ValueError, TypeError):
-                raise ValueError(f"{name}: the image data is not valid base64") from None
-            if not data:
-                raise ValueError(f"{name}: the image is empty")
-            if len(data) > jobs.MAX_IMAGE_BYTES:
-                raise ValueError(f"{name}: over {jobs.MAX_IMAGE_BYTES // 2**20} MiB, resize it first")
+            name, data = _picture(image, folder)
             view = image.get("view") or None
             if view is not None and view not in jobs.VIEW_ANGLES:
                 raise ValueError(f"{name}: the view must be one of {', '.join(jobs.VIEW_ANGLES)}")
@@ -320,6 +420,7 @@ def build_bodies(request: dict) -> list[tuple[str, dict]]:
         return bodies
     if kind == "image":
         prompt = _prompt(request)
+        sent = _sent(request, prompt, hint)
         count = request.get("count", 1)
         if isinstance(count, bool) or not isinstance(count, int) or not 1 <= count <= MAX_COUNT:
             raise ValueError(f"count must be 1 to {MAX_COUNT}")
@@ -330,7 +431,7 @@ def build_bodies(request: dict) -> list[tuple[str, dict]]:
             if "seed" in p:
                 p["seed"] += i
             label = f"Image {i + 1}/{count}: {prompt}" if count > 1 else f"Image: {prompt}"
-            bodies.append((label, {"kind": "image", "prompt": prompt,
+            bodies.append((label, {"kind": "image", "prompt": sent,
                                    "name": jobs.safe_name(prompt), "params": p}))
         return bodies
     if kind == "text-to-mesh":
@@ -341,8 +442,8 @@ def build_bodies(request: dict) -> list[tuple[str, dict]]:
         params = {"image": _params(raw.get("image"), IMAGE_PARAMS),
                   "mesh": _params(raw.get("mesh"), MESH_PARAMS)}
         return [(f"Mesh from text: {prompt}",
-                 {"kind": "text-to-mesh", "prompt": prompt, "name": jobs.safe_name(prompt),
-                  "params": params})]
+                 {"kind": "text-to-mesh", "prompt": _sent(request, prompt, hint),
+                  "name": jobs.safe_name(prompt), "params": params})]
     if kind == "views":
         params = _params(request.get("params"), VIEWS_PARAMS)
         angles = request.get("angles")
@@ -353,22 +454,12 @@ def build_bodies(request: dict) -> list[tuple[str, dict]]:
             params["views"] = list(dict.fromkeys(angles))
         front = request.get("front")
         if front is not None:
-            if not isinstance(front, dict):
-                raise ValueError("front must be {name, data}")
-            name = str(front.get("name") or "front")
-            if Path(name).suffix.lower() not in jobs.IMAGE_SUFFIXES:
-                raise ValueError(f"{name}: not an image kami can send ({', '.join(jobs.IMAGE_SUFFIXES)})")
-            try:
-                data = base64.b64decode(front.get("data") or "", validate=True)
-            except (binascii.Error, ValueError, TypeError):
-                raise ValueError(f"{name}: the image data is not valid base64") from None
-            if not data or len(data) > jobs.MAX_IMAGE_BYTES:
-                raise ValueError(f"{name}: empty, or over {jobs.MAX_IMAGE_BYTES // 2**20} MiB")
+            name, data = _picture(front, folder)
             return [(f"Views of {name}",
                      {"kind": "views", "image": base64.b64encode(data).decode(),
                       "name": jobs.views_name(Path(name).stem), "params": params})]
         prompt = _prompt(request)
-        return [(f"Views: {prompt}", {"kind": "views", "prompt": prompt,
+        return [(f"Views: {prompt}", {"kind": "views", "prompt": _sent(request, prompt, hint),
                                        "name": jobs.safe_name(prompt), "params": params})]
     raise ValueError("kind must be mesh, image, text-to-mesh or views")
 
@@ -429,8 +520,7 @@ PAGE_FILE = Path(__file__).with_name("webui.html")
 
 def page(folder: Path, token: str) -> str:
     values = {"MODEL_VIEWER": MODEL_VIEWER, "TOKEN": token,
-              "FOLDER": html.escape(str(folder.resolve())), "GALLERY": gallery(folder),
-              "SIGNATURE": signature(folder)}
+              "FOLDER": html.escape(str(folder.resolve()))}
     # one pass: a file named "{{TOKEN}}.png" stays a name, it is not filled in again
     return re.sub(r"\{\{([A-Z_]+)\}\}", lambda m: values.get(m.group(1), m.group(0)),
                   PAGE_FILE.read_text(encoding="utf-8"))
@@ -441,6 +531,7 @@ def page(folder: Path, token: str) -> str:
 def make_handler(folder: Path, port_ref: list, token: str, work: Work, status: PodStatus,
                  backend):
     pod_jobs = PodJobs(backend)
+    printer = Printer(folder)
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *args):          # quiet: the terminal shows kami's own lines
@@ -488,15 +579,23 @@ def make_handler(folder: Path, port_ref: list, token: str, work: Work, status: P
                 pod = status.get()
                 listing = pod_jobs.get(bool(pod.get("pod") and pod.get("ready")))
                 return self._json(200, {"signature": signature(folder), "pod": pod,
-                                        "jobs": work.listing(listing)})
-            if path == "/api/gallery":
-                return self._send(200, gallery(folder).encode(), "text/html; charset=utf-8")
+                                        "jobs": work.listing(listing),
+                                        "print_hint": bool(getattr(backend, "print_hint", "")),
+                                        "print_colors": jobs.PRINT_COLORS})
+            if path == "/api/objects":
+                return self._json(200, {"signature": signature(folder), "objects": objects(folder)})
+            if path.startswith("/thumbs/"):
+                picture = printer.thumbnail(path[len("/thumbs/"):])
+                if picture:
+                    return self._send(200, picture, "image/png")
+            if path.startswith("/preview/"):
+                name, body = printer.preview
+                if name and path == f"/preview/{name}.glb":
+                    return self._send(200, body, TYPES[".glb"])
             if path.startswith("/files/"):
-                name = path[len("/files/"):]
-                target = folder / name
-                # a plain file name of a result in the folder: no subpaths, no other files
-                if (name and "/" not in name and "\\" not in name and name not in (".", "..")
-                        and target.suffix.lower() in TYPES and target.is_file()):
+                # a result in the folder, or one folder deep: no other file of the disk
+                target = resolve(folder, path[len("/files/"):])
+                if target is not None:
                     return self._send(200, target.read_bytes(), TYPES[target.suffix.lower()])
             self._send(404, b"not found", "text/plain")
 
@@ -525,6 +624,13 @@ def make_handler(folder: Path, port_ref: list, token: str, work: Work, status: P
                 except ValueError as e:
                     return self._json(400, {"error": str(e)})
                 return self._json(202, {"jobs": created})
+            if path == "/api/print":
+                try:
+                    return self._json(200, printer.run(request))
+                except ValueError as e:
+                    return self._json(400, {"error": str(e)})
+                except (ConfigError, OSError) as e:
+                    return self._json(409, {"error": str(e).splitlines()[0] if str(e) else type(e).__name__})
             if path == "/api/down":
                 try:
                     result = backend.down()

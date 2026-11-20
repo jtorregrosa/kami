@@ -34,11 +34,12 @@ pod lifecycle, the in-pod cost guard, both providers and the cost reporting.
 - **Checks before billing.** Gated Hugging Face models, GPU memory and the server image
   are checked before a pod is created.
 - **Standard library only** on your PC. Everything heavy lives in the pod's image.
+  (`kami print`, which runs on your PC, is the one command with dependencies of its own.)
 
 ### Contents
 
 [Install](#install) · [Build the server image](#build-the-server-image) ·
-[Quick start](#quick-start) · [Commands](#commands) · [Profiles](#profiles) ·
+[Quick start](#quick-start) · [Print it](#print-it) · [Commands](#commands) · [Profiles](#profiles) ·
 [Cost guard](#cost-guard) · [Licenses of the models](#licenses-of-the-models) ·
 [How it works](#how-it-works) · [Tests](#tests)
 
@@ -50,7 +51,8 @@ kami init      # creates kami.toml and .env here if missing
 kami doctor    # checks config, API key, server image, model access, GPU stock
 ```
 
-Requires Python 3.11+ and has no external dependencies.
+Requires Python 3.11+ and has no external dependencies. Only `kami print` needs some:
+`pip install -e ".[print]"` (numpy, Pillow, scipy and scikit-image).
 
 Put these in `.env`:
 
@@ -182,17 +184,28 @@ LoRAs would call it its right side; kami asks them for that).
 
 `--elevation` and `--distance` take the LoRA's own words ("eye-level shot", "high-angle
 shot"; "medium shot", "wide shot"). The view the model invents (the back above all) may
-not match the front: look at them before making the mesh. kami ui has a "Text → views"
-tab.
+not match the front: look at them before making the mesh.
 
-`kami ui` has the same switch ("One object: the images are views of it").
+**`kami ui`** does all of this from a web page on your PC, in three stages:
 
-**`kami ui`** does all of this from a web page on your PC: drop images to make meshes,
-write prompts to make images (or meshes from text), follow every job on the pod (its stage
-and progress, the queue, also the ones sent from a terminal), and browse every
-result, with meshes in an interactive 3D viewer (rotate, zoom, full size) next to the
-image they came from. It shows the pod's cost and the guard's deadline, and can delete
-the pod. It never starts one: run `kami up` first (browsing needs no pod).
+- **Concept**: a description (or a picture of the front) becomes the views of one object.
+  With a pod that also makes images, "Try fronts" gives quick candidates to pick from;
+  each view can be made again on its own.
+- **Mesh**: the views go into slots named after the side they show (or one mesh per
+  picture, or straight from text), with the options of the pod's mesh model, and the
+  result opens in an interactive 3D viewer.
+- **Print**: `kami print` with a painted preview. Height, flat base, how many filaments or
+  the colours of your own; changing colours redraws at once. It runs on your PC, so it
+  works with no pod.
+
+The page opens on the stage the active pod serves (a `views-qwen` pod on Concept, a
+`pixal3d` pod on Mesh, no pod on Print), and the header says what the pod is, what it
+costs, how much it has cost and when the guard deletes it. A stage the pod does not
+serve says which `kami up -p ...` gets you there; the page never starts a pod itself.
+Below, the jobs on the pod (stage and progress, the queue, also those sent from a
+terminal) and the **library**: everything in `output_dir` and the folders directly inside
+it, grouped by object, so `owl-front.png`, `owl-left.png`, `owl-front.glb` and
+`owl-front.3mf` are one card. Click one to put it on the stage.
 
 The page is served on 127.0.0.1 only, and only that page can act: other sites cannot
 send jobs or delete the pod. kami relays the jobs, so the pod's key never reaches the
@@ -201,6 +214,68 @@ Blender opens the GLBs too.
 
 If the cloud has no stock, `kami up` **waits** for it (nothing is billed while waiting).
 `--secure` also tries secure cloud, `--max-wait MINUTES` gives up.
+
+## Print it
+
+**Prompts are written for printing.** `kami image`, `kami views` and `kami mesh --prompt`
+add a hint after your prompt, so the picture is of something a printer can make and
+`kami print` can colour: a figure standing on a wide flat base, one thick piece with
+nothing loose, a few flat colours in clearly separated areas, matte and evenly lit (a
+highlight painted into the texture would become a filament). `--colors N` says how many
+colours it asks for (4, as `kami print`), `--as-written` sends your prompt alone, and
+`print_hint` in `kami.toml` replaces the hint (`{colors}` is the number) or, as `""`,
+turns it off. A picture you bring yourself (`kami mesh photo.png`, `kami views --front`)
+is used as it is. The model follows the hint as far as it follows any prompt.
+
+A mesh from `kami mesh` is made to be looked at: a paper-thin double shell (the surface,
+and the same surface again inside it), one unit tall, Y up, with a texture. `kami print`
+turns the GLB into a 3MF for a multicolour printer. It runs on your PC: no pod, nothing
+billed.
+
+```powershell
+kami print kami-out\owl.glb                              # owl.3mf next to it: 80 mm tall, 4 colours
+kami print owl.glb --height 60 --colors 2                # smaller, two filaments
+kami print owl.glb --palette "#1a4fa0,#ffffff,#202020"   # the filaments you have, in slot order
+```
+
+```
+  › owl.glb -> 3MF
+  ✓ owl.3mf
+    size     40.6 x 37.6 x 60.0 mm · 251,064 triangles
+    solid    closed · 1 inner shell, 4 slivers removed
+    base     367 mm² flat on the plate
+    slot 1   #455A74  77% of the surface
+    slot 2   #909396  23% of the surface
+```
+
+What it does:
+
+- **A solid.** Vertices split along texture seams are welded, and the inner shells and
+  loose slivers are dropped. If that leaves a closed body, the mesh is kept as it is,
+  triangle for triangle.
+- **Rebuilt, when it does not.** A mesh that is still open, or still a hollow skin, gets a
+  new surface drawn around everything it encloses: its triangles are marked on a grid of
+  0.3 mm cubes (`--detail`), the outside is flooded from a corner, and the surface is
+  drawn where the old outer one was, with its colours. The result is always closed;
+  detail finer than a cube is lost, and an opening wider than a cube still lets the
+  flood in (the report then says it is a hollow skin). `--rebuild always` does it to any
+  mesh, `--rebuild never` writes the mesh as cleaned and leaves the repair to the slicer.
+- **On the plate.** Z up, scaled to `--height` mm, and the lowest `--base` percent of it
+  (2 by default) pressed flat so it stands.
+- **A few colours.** Every triangle takes the texture's colour under it; those are reduced
+  to `--colors` (4, one AMS), the one covering most surface in slot 1. Light and dark
+  count less than hue, since a texture has the light baked into it and a shadow is not
+  another filament. With `--palette` each triangle takes the closest of your filaments
+  instead, in the slot order you wrote. `--smooth` passes clean the borders, and patches
+  under `--min-patch` mm² (too small to print, and each one a filament change) join
+  their surroundings.
+- **The 3MF** says the colours twice: as Bambu Studio / OrcaSlicer paint (one filament
+  slot per triangle) and as standard 3MF materials, for other slicers.
+
+Open it in Bambu Studio and give filaments 1 to N the colours `kami print` lists (the
+3MF carries the paint, not your filaments). Fewer colours print faster and waste less in
+purges: try `--colors 2` or `3` before 4. The mesh keeps every triangle, so the file is
+some MB.
 
 ## Commands
 
@@ -214,9 +289,10 @@ If the cloud has no stock, `kami up` **waits** for it (nothing is billed while w
 | `kami up [-p PROFILE]` | Create the pod and wait until the models are loaded (`--budget`, `--max-hours`, `--idle`) |
 | `kami mesh IMAGE...` | Image(s) → textured GLB (`--seed`, `--texture-size`, `--decimation-target`, `--no-remesh`; `--views` for one mesh from several views, `--view-mode`) |
 | `kami mesh --prompt TEXT` | Text → image → GLB (needs a profile with both models) |
-| `kami image PROMPT` | Text → PNG (`-n`, `--seed`, `--steps`, `--guidance`, `--width`, `--height`) |
-| `kami views CONCEPT` | Concept → front, left, back, right pictures of it, for `kami mesh` with views (`--front IMAGE`, `--angles`, `--seed`, `--steps`, `--guidance`, `--lora-scale`, `--elevation`, `--distance`) |
-| `kami ui [FOLDER]` | Web page on this PC: make meshes and images on the pod, browse the results (`--port`, `--no-browser`) |
+| `kami image PROMPT` | Text → PNG, with the printing hint (`-n`, `--seed`, `--steps`, `--guidance`, `--width`, `--height`, `--colors`, `--as-written`) |
+| `kami views CONCEPT` | Concept → front, left, back, right pictures of it, for `kami mesh` with views (`--front IMAGE`, `--angles`, `--seed`, `--steps`, `--guidance`, `--lora-scale`, `--elevation`, `--distance`, `--colors`, `--as-written`) |
+| `kami print MESH...` | GLB → 3MF to print in colours, on this PC: closed solid, flat base, mm, the texture as a few filaments (`--height`, `--base`, `--colors`, `--palette`, `--rebuild`, `--detail`, `--smooth`, `--min-patch`, `--keep-cavities`, `-o`) |
+| `kami ui [FOLDER]` | Web page on this PC: Concept → Mesh → Print, opening on what the pod serves; the library by object (`--port`, `--no-browser`) |
 | `kami jobs` | The pod's jobs, whoever sent them: stage and progress of the running one, the queue, the last ones (`--watch`, `--json`) |
 | `kami reload` | Send this kami's server code to the running pod and restart the server: no new pod, no download (`--force` with jobs running) |
 | `kami status` | Pod state, cost so far, guard, jobs done (`--json`; exit 0 ready, 2 not ready, 3 no pod) |
@@ -340,3 +416,4 @@ python -m unittest
 ```
 
 The tests mock every provider and the GPU. Nothing reaches a live API or needs torch.
+Those of `kami print` (`tests/test_printing.py`) are skipped without its dependencies.

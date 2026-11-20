@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="kami-token" content="{{TOKEN}}">
+<meta name="kami-folder" content="{{FOLDER}}">
 <title>kami</title>
 <script type="module" src="{{MODEL_VIEWER}}"></script>
 <style>
@@ -20,79 +21,148 @@
   }
 }
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 body { margin: 0; background: var(--bg); color: var(--text);
        font: 15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
 code { font: 13px ui-monospace, "Cascadia Code", Consolas, monospace; background: var(--stage);
-       padding: 1px 5px; border-radius: 4px; }
+       padding: 1px 5px; border-radius: 4px; overflow-wrap: anywhere; }
 button, input, select, textarea { font: inherit; color: inherit; }
-.wrap { max-width: 1280px; margin: 0 auto; padding: 0 24px; }
-
-/* header: the pod */
-header { position: sticky; top: 0; z-index: 5; background: var(--bg);
-         border-bottom: 1px solid var(--line); }
-header .wrap { display: flex; gap: 16px; align-items: center; min-height: 56px; flex-wrap: wrap;
-               padding-top: 8px; padding-bottom: 8px; }
+.wrap { max-width: 1320px; margin: 0 auto; padding: 0 24px; }
 h1 { margin: 0; font-size: 20px; letter-spacing: .02em; }
+h2 { margin: 0; font-size: 16px; }
+h3 { margin: 0; font-size: 14px; font-weight: 600; }
+.dim { color: var(--dim); font-size: 13px; }
+
+/* header: the pod, what it is for, what it costs */
+header { position: sticky; top: 0; z-index: 5; background: var(--bg); border-bottom: 1px solid var(--line); }
+header .wrap { display: flex; gap: 14px; align-items: center; min-height: 56px; flex-wrap: wrap;
+               padding-top: 8px; padding-bottom: 8px; }
 .pod { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; flex: 1; min-width: 0; }
 .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--dim); flex: none; }
 .dot.ready { background: var(--ok); } .dot.busy { background: var(--warn); } .dot.bad { background: var(--bad); }
-.pod .what { font-weight: 500; }
-.pod .meta { color: var(--dim); font-size: 13px; }
-.btn { border: 1px solid var(--line); background: var(--panel); border-radius: 8px;
-       padding: 6px 12px; cursor: pointer; }
+.mode { font-weight: 600; }
+.chip { font-size: 12px; border: 1px solid var(--line); border-radius: 999px; padding: 1px 9px; color: var(--dim);
+        white-space: nowrap; }
+.btn { border: 1px solid var(--line); background: var(--panel); border-radius: 8px; padding: 6px 12px; cursor: pointer; }
 .btn:hover { border-color: var(--dim); }
 .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text);
                font-weight: 600; padding: 8px 16px; }
-.btn.primary:disabled { opacity: .45; cursor: not-allowed; }
+.btn:disabled { opacity: .45; cursor: not-allowed; }
+.btn.small { padding: 3px 9px; font-size: 13px; }
 .btn.danger { color: var(--bad); }
 .btn.danger.armed { background: var(--bad); border-color: var(--bad); color: #fff; }
 
-/* create */
-section { margin: 20px 0; }
-.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; }
-.tabs { display: flex; gap: 4px; padding: 6px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
-.tab { border: 0; background: none; padding: 7px 12px; border-radius: 8px; cursor: pointer; color: var(--dim); }
-.tab[aria-selected="true"] { background: var(--stage); color: var(--text); font-weight: 500; }
-.tab:disabled { opacity: .4; cursor: not-allowed; }
-.angles { border: 0; padding: 0; margin: 0; display: flex; flex-wrap: wrap; gap: 6px 14px; }
-.angles legend { padding: 0; margin-bottom: 6px; font-size: 13px; opacity: .8; }
-.form { padding: 16px; display: grid; gap: 14px; }
-.form[hidden] { display: none; }
-.blocked { padding: 18px 16px; color: var(--dim); }
-.drop { border: 1.5px dashed var(--line); border-radius: 10px; padding: 18px; text-align: center;
-        color: var(--dim); cursor: pointer; background: var(--stage); }
+/* the three stages */
+.stages { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin: 18px 0 14px; }
+.stagetab { text-align: left; border: 1px solid var(--line); background: var(--panel); border-radius: 12px;
+            padding: 10px 14px; cursor: pointer; display: grid; gap: 1px; }
+.stagetab b { font-size: 16px; }
+.stagetab span { font-size: 13px; color: var(--dim); }
+.stagetab[aria-selected="true"] { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.stagetab.here span { color: var(--ok); }
+
+.work { display: grid; grid-template-columns: minmax(0, 360px) minmax(0, 1fr); gap: 14px; align-items: start; }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px; }
+.controls { display: grid; gap: 14px; }
+.controls form { display: grid; gap: 14px; }
+label.field { display: grid; gap: 3px; font-size: 13px; color: var(--dim); }
+.row { display: flex; gap: 10px; flex-wrap: wrap; align-items: end; }
+.row label.field { flex: 1; min-width: 96px; }
+input[type="number"], input[type="text"], select { width: 100%; padding: 6px 8px; border-radius: 7px;
+  border: 1px solid var(--line); background: var(--field); }
+textarea { width: 100%; min-height: 84px; resize: vertical; padding: 10px; border-radius: 8px;
+           border: 1px solid var(--line); background: var(--field); }
+label.check { display: flex; align-items: center; gap: 7px; font-size: 14px; }
+.seg { display: flex; gap: 4px; background: var(--stage); border-radius: 9px; padding: 3px; flex-wrap: wrap; }
+.seg button { flex: 1; border: 0; background: none; border-radius: 7px; padding: 6px 8px; cursor: pointer;
+              color: var(--dim); font-size: 13px; white-space: nowrap; }
+.seg button[aria-pressed="true"] { background: var(--panel); color: var(--text); font-weight: 600; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chips label { border: 1px solid var(--line); border-radius: 999px; padding: 3px 10px; font-size: 13px; cursor: pointer; }
+.chips input { position: absolute; opacity: 0; pointer-events: none; }
+.chips label:has(input:checked) { border-color: var(--accent); color: var(--accent); font-weight: 600; }
+.chips label:has(input:focus-visible) { outline: 2px solid var(--accent); }
+details summary { cursor: pointer; color: var(--dim); font-size: 13px; }
+details .row { margin-top: 10px; }
+.actions { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.notice { font-size: 13px; color: var(--dim); min-height: 1.2em; }
+.notice.bad { color: var(--bad); }
+.blocked { display: grid; gap: 10px; }
+.cmd { display: flex; gap: 8px; align-items: center; justify-content: space-between; }
+
+/* view slots and pictures */
+.slots { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.slot { position: relative; aspect-ratio: 1; border: 1.5px dashed var(--line); border-radius: 9px;
+        background: var(--stage); display: flex; align-items: center; justify-content: center; text-align: center;
+        font-size: 12px; color: var(--dim); cursor: pointer; overflow: hidden; padding: 0; }
+.slot.filled { border-style: solid; border-color: var(--accent); }
+.slot.over { border-color: var(--accent); color: var(--text); }
+.slot img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.slot .tag { position: absolute; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,.6); color: #fff;
+             font-size: 11px; padding: 1px 0; }
+.slot .x { position: absolute; top: 3px; right: 3px; width: 20px; height: 20px; border: 0; border-radius: 6px;
+           background: rgba(0,0,0,.6); color: #fff; cursor: pointer; line-height: 1; }
+.drop { border: 1.5px dashed var(--line); border-radius: 10px; padding: 16px; text-align: center;
+        color: var(--dim); cursor: pointer; background: var(--stage); font-size: 14px; }
 .drop.over { border-color: var(--accent); color: var(--text); }
 .thumbs { display: flex; gap: 8px; flex-wrap: wrap; }
-.thumb { position: relative; width: 84px; height: 84px; border-radius: 8px; overflow: hidden;
+.thumb { position: relative; width: 72px; height: 72px; border-radius: 8px; overflow: hidden;
          background: var(--stage); border: 1px solid var(--line); }
 .thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
-.thumb-name { display: flex; align-items: center; justify-content: center; height: 100%;
-  padding: 4px; font-size: 11px; text-align: center; word-break: break-all; }
-.thumb button { position: absolute; top: 3px; right: 3px; width: 22px; height: 22px; border: 0;
+.thumb button { position: absolute; top: 3px; right: 3px; width: 20px; height: 20px; border: 0;
                 border-radius: 6px; background: rgba(0,0,0,.6); color: #fff; cursor: pointer; line-height: 1; }
-.thumb select { position: absolute; left: 3px; right: 3px; bottom: 3px; font-size: 11px;
-                border-radius: 5px; border: 0; padding: 2px; background: rgba(0,0,0,.65); color: #fff; }
-textarea { width: 100%; min-height: 72px; resize: vertical; padding: 10px; border-radius: 8px;
-           border: 1px solid var(--line); background: var(--field); }
-.opts { display: flex; gap: 12px; flex-wrap: wrap; align-items: end; }
-.opts label { display: grid; gap: 3px; font-size: 13px; color: var(--dim); }
-.opts input, .opts select { width: 120px; padding: 6px 8px; border-radius: 7px;
-                            border: 1px solid var(--line); background: var(--field); }
-.opts label.check { display: flex; align-items: center; gap: 6px; padding-bottom: 6px; }
-.opts label.check input { width: auto; }
-details summary { cursor: pointer; color: var(--dim); font-size: 13px; }
-details .opts { margin-top: 10px; }
-.actions { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
-.notice { font-size: 13px; color: var(--dim); }
-.notice.bad { color: var(--bad); }
+.swatches { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.swatch { display: grid; gap: 2px; justify-items: center; font-size: 11px; color: var(--dim); position: relative; }
+.swatch input[type="color"] { width: 40px; height: 40px; padding: 0; border: 1px solid var(--line);
+                              border-radius: 8px; background: none; cursor: pointer; }
+.swatch .x { position: absolute; top: -6px; right: -6px; width: 18px; height: 18px; border: 0; border-radius: 50%;
+             background: var(--dim); color: var(--panel); cursor: pointer; line-height: 1; font-size: 12px; }
+
+/* the stage: what is being made */
+.stage { display: grid; gap: 12px; min-width: 0; }
+.stage.full { position: fixed; inset: 16px; z-index: 20; overflow: auto; box-shadow: 0 10px 40px rgba(0,0,0,.35);
+              grid-template-rows: auto 1fr; }
+body.has-full::before { content: ""; position: fixed; inset: 0; background: rgba(0,0,0,.5); z-index: 19; }
+.stagehead { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+.stagehead h2 { overflow-wrap: anywhere; }
+.stagehead .grow { margin-left: auto; }
+.viewer { position: relative; background: var(--stage); border-radius: 10px; height: min(56vh, 520px); min-height: 280px;
+          display: flex; align-items: center; justify-content: center; color: var(--dim); text-align: center;
+          padding: 16px; overflow: hidden; }
+.stage.full .viewer { height: auto; min-height: 60vh; }
+.viewer model-viewer, .viewer > img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
+model-viewer { --poster-color: transparent; }
+.veil { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+        background: color-mix(in srgb, var(--stage) 75%, transparent); color: var(--text); z-index: 2; }
+.views { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+.view { margin: 0; background: var(--stage); border-radius: 10px; overflow: hidden; display: grid; }
+.view img { width: 100%; aspect-ratio: 1; object-fit: contain; display: block; cursor: zoom-in; }
+.view figcaption { display: flex; justify-content: space-between; align-items: center; gap: 6px;
+                   padding: 6px 8px; font-size: 13px; }
+.strip { display: flex; gap: 8px; flex-wrap: wrap; }
+.strip img { width: 64px; height: 64px; object-fit: cover; border-radius: 8px; background: var(--stage); cursor: zoom-in; }
+.metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 8px; }
+.metric { background: var(--stage); border-radius: 9px; padding: 8px 10px; }
+.metric small { display: block; color: var(--dim); font-size: 12px; }
+.metric b { font-weight: 600; }
+.metric b.ok { color: var(--ok); } .metric b.warn { color: var(--warn); }
+.slotlist { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; font-size: 14px; }
+.slotlist li { display: flex; gap: 8px; align-items: center; }
+.slotlist i { width: 16px; height: 16px; border-radius: 4px; border: 1px solid var(--line); flex: none; }
+.warns { margin: 0; padding-left: 18px; color: var(--warn); font-size: 13px; }
+.next { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; border-top: 1px solid var(--line); padding-top: 12px; }
+.next .grow { flex: 1; min-width: 200px; }
 
 /* jobs */
+section.block { margin: 22px 0; }
+.head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
+.head .dim { overflow-wrap: anywhere; }
 .jobs { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
 .job { display: grid; grid-template-columns: auto 1fr auto; gap: 4px 10px; align-items: center;
        background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px; }
 .job .label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .job .state { font-size: 13px; color: var(--dim); white-space: nowrap; }
-.job .detail { grid-column: 2 / -1; font-size: 13px; color: var(--dim); }
+.job .detail { grid-column: 2 / -1; font-size: 13px; color: var(--dim); overflow-wrap: anywhere; }
 .job .detail.bad { color: var(--bad); }
 .job .detail a { color: var(--text); }
 .job .progress { grid-column: 2 / -1; display: grid; grid-template-columns: 1fr auto; gap: 3px 10px;
@@ -100,48 +170,38 @@ details .opts { margin-top: 10px; }
 .job .track { height: 5px; border-radius: 3px; background: var(--stage); overflow: hidden; }
 .job .fill { height: 100%; background: var(--accent); border-radius: 3px; transition: width .6s ease; }
 .job .pct { font-variant-numeric: tabular-nums; }
-.job .stage { grid-column: 1 / -1; }
+.job .stagename { grid-column: 1 / -1; }
 .job .from { font-size: 11px; color: var(--dim); border: 1px solid var(--line); border-radius: 4px;
              padding: 0 4px; margin-left: 6px; }
-@media (prefers-reduced-motion: reduce) { .job .fill { transition: none; } }
 .spin { width: 9px; height: 9px; border-radius: 50%; border: 2px solid var(--warn);
-        border-right-color: transparent; animation: spin 1s linear infinite; }
+        border-right-color: transparent; animation: spin 1s linear infinite; flex: none; }
 @keyframes spin { to { transform: rotate(360deg); } }
-@media (prefers-reduced-motion: reduce) { .spin { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .spin { animation: none; } .job .fill { transition: none; } }
 
-/* gallery */
-.head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
-h2 { margin: 0; font-size: 16px; }
-.head .meta { color: var(--dim); font-size: 13px; overflow-wrap: anywhere; }
-.grid { display: grid; gap: 16px; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); }
-.card { margin: 0; background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
-        overflow: hidden; display: flex; flex-direction: column; }
-.media { position: relative; aspect-ratio: 1; background: var(--stage); }
-.media img, .media model-viewer { width: 100%; height: 100%; display: block; object-fit: contain; }
-model-viewer { --poster-color: transparent; }
-.grow { position: absolute; top: 8px; right: 8px; border: 0; border-radius: 8px; width: 32px;
-        height: 32px; background: rgba(0,0,0,.45); color: #fff; font-size: 16px; cursor: pointer;
-        opacity: 0; transition: opacity .15s; }
-.card:hover .grow, .grow:focus-visible { opacity: 1; }
-figcaption { padding: 10px 12px 12px; display: grid; grid-template-columns: auto 1fr; gap: 2px 8px;
-             align-items: center; }
+/* library */
+.grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); }
+.obj { text-align: left; border: 1px solid var(--line); background: var(--panel); border-radius: 12px; padding: 0;
+       overflow: hidden; cursor: pointer; display: grid; }
+.obj:hover { border-color: var(--dim); }
+.obj[aria-pressed="true"] { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.obj .pic { aspect-ratio: 1; background: var(--stage); display: flex; align-items: center; justify-content: center;
+            color: var(--dim); font-size: 13px; }
+.obj .pic img { width: 100%; height: 100%; object-fit: contain; display: block; }
+.obj .cap { padding: 8px 10px 10px; display: grid; gap: 4px; }
+.obj .name { font-weight: 600; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.badges { display: flex; gap: 4px; flex-wrap: wrap; }
 .badge { font-size: 11px; font-weight: 600; color: var(--accent); border: 1px solid currentColor;
          border-radius: 4px; padding: 0 5px; }
-.name { color: var(--text); text-decoration: none; font-weight: 500; overflow: hidden;
-        text-overflow: ellipsis; white-space: nowrap; }
-.name:hover { text-decoration: underline; }
-figcaption .meta { grid-column: 1 / -1; color: var(--dim); font-size: 13px; }
-figcaption .meta a { color: var(--dim); }
-.empty { grid-column: 1 / -1; color: var(--dim); padding: 40px 0; text-align: center; }
-.card.full { position: fixed; inset: 16px; z-index: 20; box-shadow: 0 10px 40px rgba(0,0,0,.35); }
-.card.full .media { aspect-ratio: auto; flex: 1; }
-.card.full .grow { opacity: 1; }
-body.has-full::before { content: ""; position: fixed; inset: 0; background: rgba(0,0,0,.5); z-index: 19; }
+.badge.plain { color: var(--dim); font-weight: 400; }
+.empty { color: var(--dim); padding: 28px 0; text-align: center; }
+.lightbox { position: fixed; inset: 0; z-index: 30; background: rgba(0,0,0,.8); display: flex; align-items: center;
+            justify-content: center; cursor: zoom-out; padding: 24px; }
+.lightbox img { max-width: 100%; max-height: 100%; object-fit: contain; }
 
-@media (max-width: 640px) {
-  .wrap { padding: 0 16px; }
-  .grid { grid-template-columns: 1fr; }
-  .opts input, .opts select { width: 104px; }
+@media (max-width: 860px) {
+  .wrap { padding: 0 14px; }
+  .work { grid-template-columns: minmax(0, 1fr); }
+  .stagetab span { display: none; }
 }
 </style>
 </head>
@@ -151,159 +211,80 @@ body.has-full::before { content: ""; position: fixed; inset: 0; background: rgba
     <h1>kami</h1>
     <div class="pod" id="pod" aria-live="polite">
       <span class="dot" id="pod-dot"></span>
-      <span class="what" id="pod-what">Checking the pod…</span>
-      <span class="meta" id="pod-meta"></span>
+      <span class="mode" id="pod-mode">Checking the pod…</span>
+      <span class="chip" id="pod-profile" hidden></span>
+      <span class="dim" id="pod-meta"></span>
     </div>
     <button type="button" class="btn danger" id="down" hidden>Delete pod</button>
   </div>
 </header>
 
 <main class="wrap">
-  <section>
-    <div class="panel">
-      <div class="tabs" role="tablist">
-        <button type="button" class="tab" role="tab" data-tab="mesh" aria-selected="true">Image → mesh</button>
-        <button type="button" class="tab" role="tab" data-tab="image" aria-selected="false">Text → image</button>
-        <button type="button" class="tab" role="tab" data-tab="text-to-mesh" aria-selected="false">Text → mesh</button>
-        <button type="button" class="tab" role="tab" data-tab="views" aria-selected="false">Text → views</button>
-      </div>
-      <p class="blocked" id="blocked">Checking the pod…</p>
+  <nav class="stages" role="tablist" aria-label="Stages">
+    <button type="button" class="stagetab" role="tab" data-stage="concept"><b>Concept</b><span></span></button>
+    <button type="button" class="stagetab" role="tab" data-stage="mesh"><b>Mesh</b><span></span></button>
+    <button type="button" class="stagetab" role="tab" data-stage="print"><b>Print</b><span></span></button>
+  </nav>
 
-      <form class="form" data-form="mesh" hidden>
-        <div class="drop" id="drop" tabindex="0" role="button">
-          Drop images here, paste them, or click to choose (PNG, JPG, WebP, AVIF, HEIC, TIFF, BMP, GIF).
-          A PNG with transparency skips the background removal.
-        </div>
-        <input type="file" id="files" accept=".png,.jpg,.jpeg,.webp,.avif,.heic,.heif,.tif,.tiff,.bmp,.gif" multiple hidden>
-        <div class="thumbs" id="thumbs"></div>
-        <div class="opts">
-          <label class="check" id="views-label"><input type="checkbox" id="as-views">
-            One object: the images are views of it</label>
-          <label id="mode-label" hidden>Views<select name="multiview_mode">
-            <option value="">one per step</option>
-            <option value="multidiffusion">all, averaged (slower)</option></select></label>
-        </div>
-        <p class="notice" id="views-note" hidden></p>
-        <details>
-          <summary>Options</summary>
-          <div class="opts">
-            <label>Seed<input name="seed" type="number" placeholder="random"></label>
-            <label>Texture<select name="texture_size"><option value="">default</option>
-              <option>1024</option><option>2048</option><option>4096</option></select></label>
-            <label>Faces<input name="decimation_target" type="number" min="1000" step="1000" placeholder="default"></label>
-            <label class="check"><input name="remesh" type="checkbox" checked>Remesh</label>
-          </div>
-        </details>
-        <div class="actions">
-          <button type="submit" class="btn primary">Make mesh</button>
-          <span class="notice" data-notice></span>
-        </div>
-      </form>
+  <div class="work">
+    <aside class="panel controls" id="controls"></aside>
+    <section class="panel stage" id="stage" aria-live="polite"></section>
+  </div>
 
-      <form class="form" data-form="image" hidden>
-        <textarea name="prompt" placeholder="A ceramic owl on a wooden shelf, studio light" required></textarea>
-        <div class="opts">
-          <label>Images<input name="count" type="number" min="1" max="8" value="1"></label>
-          <label>Seed<input name="seed" type="number" placeholder="random"></label>
-        </div>
-        <details>
-          <summary>Options</summary>
-          <div class="opts">
-            <label>Steps<input name="steps" type="number" min="1" placeholder="default"></label>
-            <label>Guidance<input name="guidance" type="number" step="0.1" min="0" placeholder="default"></label>
-            <label>Width<input name="width" type="number" step="64" min="256" placeholder="1024"></label>
-            <label>Height<input name="height" type="number" step="64" min="256" placeholder="1024"></label>
-          </div>
-        </details>
-        <div class="actions">
-          <button type="submit" class="btn primary">Make image</button>
-          <span class="notice" data-notice></span>
-        </div>
-      </form>
-
-      <form class="form" data-form="views" hidden>
-        <textarea name="prompt" placeholder="A ceramic owl"></textarea>
-        <div class="opts">
-          <label>Front picture<input name="front" type="file"
-            accept=".png,.jpg,.jpeg,.webp,.avif,.heic,.heif,.tif,.tiff,.bmp,.gif"></label>
-          <label>Seed<input name="seed" type="number" placeholder="random"></label>
-        </div>
-        <fieldset class="angles">
-          <legend>Views besides the front</legend>
-          <label class="check"><input type="checkbox" name="angle" value="left" checked>left</label>
-          <label class="check"><input type="checkbox" name="angle" value="back" checked>back</label>
-          <label class="check"><input type="checkbox" name="angle" value="right" checked>right</label>
-          <label class="check"><input type="checkbox" name="angle" value="front-left">front-left</label>
-          <label class="check"><input type="checkbox" name="angle" value="front-right">front-right</label>
-          <label class="check"><input type="checkbox" name="angle" value="back-left">back-left</label>
-          <label class="check"><input type="checkbox" name="angle" value="back-right">back-right</label>
-        </fieldset>
-        <p class="notice" id="views-hint"></p>
-        <details>
-          <summary>Options</summary>
-          <div class="opts">
-            <label>Steps<input name="steps" type="number" min="1" placeholder="default"></label>
-            <label>Guidance<input name="guidance" type="number" step="0.1" min="0" placeholder="default"></label>
-            <label>LoRA weight<input name="lora_scale" type="number" step="0.05" min="0" max="1.5" placeholder="0.9"></label>
-          </div>
-        </details>
-        <div class="actions">
-          <button type="submit" class="btn primary">Make views</button>
-          <span class="notice" data-notice></span>
-        </div>
-      </form>
-
-      <form class="form" data-form="text-to-mesh" hidden>
-        <textarea name="prompt" placeholder="A ceramic owl, full body, plain background" required></textarea>
-        <div class="opts">
-          <label>Seed<input name="seed" type="number" placeholder="random"></label>
-        </div>
-        <details>
-          <summary>Options</summary>
-          <div class="opts">
-            <label>Texture<select name="texture_size"><option value="">default</option>
-              <option>1024</option><option>2048</option><option>4096</option></select></label>
-            <label>Faces<input name="decimation_target" type="number" min="1000" step="1000" placeholder="default"></label>
-            <label class="check"><input name="remesh" type="checkbox" checked>Remesh</label>
-          </div>
-        </details>
-        <div class="actions">
-          <button type="submit" class="btn primary">Make mesh</button>
-          <span class="notice" data-notice></span>
-        </div>
-      </form>
-    </div>
-  </section>
-
-  <section id="jobs-section" hidden>
-    <div class="head"><h2>Jobs</h2><span class="meta">on the pod: the running one, the queue, the last ones</span></div>
+  <section class="block" id="jobs-section" hidden>
+    <div class="head"><h2>Jobs</h2><span class="dim">on the pod: the running one, the queue, the last ones</span></div>
     <ul class="jobs" id="jobs"></ul>
   </section>
 
-  <section>
-    <div class="head"><h2>Results</h2><span class="meta">{{FOLDER}}</span></div>
-    <div class="grid" id="gallery">{{GALLERY}}</div>
+  <section class="block">
+    <div class="head"><h2>Library</h2><span class="dim" id="folder"></span></div>
+    <div class="grid" id="library"><p class="empty">Loading…</p></div>
   </section>
 </main>
 
 <script>
 "use strict";
 const TOKEN = document.querySelector('meta[name="kami-token"]').content;
-let signature = "{{SIGNATURE}}";
-let pod = null;            // the last /api/state pod info
-let tab = "mesh";
-const images = [];         // {name, data (base64), url}
+const FOLDER = document.querySelector('meta[name="kami-folder"]').content;
+const VIEW_ORDER = ["front", "left", "back", "right", "front-left", "front-right", "back-left", "back-right"];
+const STAGES = ["concept", "mesh", "print"];
+
+let pod = null;              // the last /api/state pod info
+let hint = false, hintColors = 4;
+let objects = [], signature = "";
+let stage = null, picked = false;        // picked: the user chose a stage, stop following the pod
+let current = null;          // key of the object on the stage
+let meshMode = "views";      // views | each | text
+const slots = {};            // view -> {file} (library) or {name, data, url} (uploaded)
+const loose = [];            // pictures for "one mesh per picture"
+const print = {height: 80, base: 2, mode: "auto", colors: 4, palette: [], rebuild: "auto", detail: 0.3,
+               result: null, busy: false, dirty: false, error: "", forFile: null};
+let controlsKey = "", stageKey = "";
+const doneJobs = new Set();
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
-
+function el(tag, attrs, ...kids) {
+  const node = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (v === false || v == null) continue;
+    if (k === "class") node.className = v;
+    else if (k === "text") node.textContent = v;
+    else if (k.startsWith("on")) node.addEventListener(k.slice(2), v);
+    else if (v === true) node.setAttribute(k, "");
+    else node.setAttribute(k, v);
+  }
+  for (const kid of kids.flat()) if (kid != null && kid !== false) node.append(kid);
+  return node;
+}
+const fileUrl = rel => "files/" + rel.split("/").map(encodeURIComponent).join("/");
 function money(x) { return typeof x === "number" ? "$" + x.toFixed(2) : "?"; }
 function minutes(s) {
   s = Math.max(0, Math.round(s));
   if (s < 3600) return Math.round(s / 60) + " min";
   return Math.floor(s / 3600) + " h " + String(Math.round((s % 3600) / 60)).padStart(2, "0") + " min";
 }
-
+function size(n) { return n >= 1e5 ? (n / 1e6).toFixed(1) + " MB" : Math.round(n / 1e3) + " kB"; }
 async function post(path, body) {
   const r = await fetch(path, {method: "POST", body: JSON.stringify(body),
                                headers: {"Content-Type": "application/json", "X-Kami-Token": TOKEN}});
@@ -312,66 +293,65 @@ async function post(path, body) {
   if (!r.ok) throw new Error(data.error || ("HTTP " + r.status));
   return data;
 }
+function copyButton(text) {
+  const b = el("button", {type: "button", class: "btn small", text: "Copy"});
+  b.addEventListener("click", async () => {
+    try { await navigator.clipboard.writeText(text); b.textContent = "Copied"; }
+    catch (e) { b.textContent = "Select it"; }
+    setTimeout(() => { b.textContent = "Copy"; }, 1500);
+  });
+  return b;
+}
+const command = text => el("div", {class: "cmd"}, el("code", {text}), copyButton(text));
 
-/* --- the pod --- */
+/* --- the pod, and what it is for --- */
 function served() { return (pod && pod.served) || {}; }
 function ready() { return !!(pod && pod.pod && pod.ready); }
+function can(name) {
+  const s = served();
+  if (name === "print") return true;
+  if (!ready()) return false;
+  return name === "mesh" ? !!s.mesh_model : !!(s.image_model || s.views_model);
+}
+function podMode() {
+  const concept = can("concept"), mesh = can("mesh");
+  return concept && mesh ? "Concept + mesh pod" : mesh ? "Mesh pod" : concept ? "Concept pod" : "Pod";
+}
+function obj() { return objects.find(o => o.key === current) || null; }
+function meshOf(o) { return o && o.meshes.length ? o.meshes[0] : null; }
+function frontOf(o) { return o ? (o.views.front || o.images[0] || Object.values(o.views)[0] || null) : null; }
 
 function renderPod() {
-  const dot = $("#pod-dot"), what = $("#pod-what"), meta = $("#pod-meta"), down = $("#down");
+  const dot = $("#pod-dot"), mode = $("#pod-mode"), meta = $("#pod-meta"), down = $("#down"), prof = $("#pod-profile");
   dot.className = "dot";
   meta.textContent = "";
   down.hidden = true;
+  prof.hidden = true;
   const p = pod && pod.pod;
-  if (!pod) { what.textContent = "Checking the pod…"; return; }
-  if (pod.error && !p) { dot.classList.add("bad"); what.textContent = "Cannot read the pod: " + pod.error; return; }
+  if (!pod) { mode.textContent = "Checking the pod…"; return; }
+  if (pod.error && !p) { dot.classList.add("bad"); mode.textContent = "Cannot read the pod: " + pod.error; return; }
   if (!p) {
-    what.textContent = pod.waiting ? "Waiting for GPU stock (kami up)" : "No pod";
+    mode.textContent = pod.waiting ? "Waiting for GPU stock (kami up)" : "No pod";
+    meta.textContent = pod.waiting ? "" : "nothing is billing";
     if (pod.waiting) dot.classList.add("busy");
     return;
   }
   down.hidden = false;
-  if (p.status === "GONE") { dot.classList.add("bad"); what.textContent = "The pod no longer exists"; return; }
+  if (p.status === "GONE") { dot.classList.add("bad"); mode.textContent = "The pod no longer exists"; return; }
   dot.classList.add(pod.ready ? "ready" : "busy");
-  what.textContent = (p.profile || "pod") + " · " + (p.gpu || "GPU") + (pod.ready ? "" : " · starting");
-  const bits = [];
+  mode.textContent = pod.ready ? podMode() : "Pod starting";
+  prof.hidden = false;
+  prof.textContent = p.profile || "pod";
+  const s = served(), bits = [];
+  const models = [s.image_model, s.views_model, s.mesh_model].filter(Boolean).map(m => m.split("/").pop());
+  if (models.length) bits.push(models.join(" + "));
+  if (p.gpu) bits.push(p.gpu);
   if (typeof p.cost_per_hour === "number") bits.push(money(p.cost_per_hour) + "/h");
   if (typeof p.session_cost_estimate === "number") bits.push("≈ " + money(p.session_cost_estimate) + " so far");
   const g = p.guard || {};
-  if (g.deadline) bits.push("guard deletes it in " + minutes(g.deadline - Date.now() / 1000));
+  if (g.deadline) bits.push("deletes itself in " + minutes(g.deadline - Date.now() / 1000));
   if (g.idle_minutes) bits.push("or after " + g.idle_minutes + " min idle");
   meta.textContent = bits.join(" · ");
-}
-
-function renderForms() {
-  const s = served(), blocked = $("#blocked");
-  const can = {"mesh": !!s.mesh_model, "image": !!s.image_model,
-               "text-to-mesh": !!(s.mesh_model && s.image_model), "views": !!s.views_model};
-  $("#views-hint").textContent = s.views_model
-    ? (s.views_from_prompt ? "The front is made from the text, or give your own picture of it. "
-                           : "This pod's " + s.views_model + " edits pictures: give a front picture. ")
-      + "Then " + s.views_model + " turns the camera around it."
-    : "";
-  if (!ready()) {
-    const p = pod && pod.pod;
-    blocked.innerHTML = "";
-    blocked.append(p ? "The pod is starting; this unlocks when it is ready (" : "No pod is running. In a terminal: ");
-    const code = document.createElement("code");
-    code.textContent = p ? "kami status" : "kami up";
-    blocked.append(code, p ? ")." : " (or kami up -p studio for both models). Browsing the results needs no pod.");
-    blocked.hidden = false;
-    $$(".form").forEach(f => f.hidden = true);
-    $$(".tab").forEach(t => t.disabled = false);
-    return;
-  }
-  $$(".tab").forEach(t => {
-    t.disabled = !can[t.dataset.tab];
-    t.title = t.disabled ? "This pod's profile does not serve it" : "";
-  });
-  if (!can[tab]) tab = Object.keys(can).find(k => can[k]) || tab;
-  blocked.hidden = true;
-  $$(".tab").forEach(t => t.setAttribute("aria-selected", String(t.dataset.tab === tab)));
-  $$(".form").forEach(f => f.hidden = f.dataset.form !== tab);
 }
 
 let armedAt = 0;
@@ -389,7 +369,7 @@ $("#down").addEventListener("click", async () => {
   b.textContent = "Deleting…";
   try {
     const r = await post("api/down", {});
-    $("#pod-what").textContent = "Pod " + (r.pod_id || "") + " deleted" +
+    $("#pod-mode").textContent = "Pod " + (r.pod_id || "") + " deleted" +
       (typeof r.session_cost_estimate === "number" ? " · ≈ " + money(r.session_cost_estimate) + " this session" : "");
   } catch (e) {
     $("#pod-meta").textContent = "Could not delete it: " + e.message + " (kami down in a terminal)";
@@ -400,280 +380,699 @@ $("#down").addEventListener("click", async () => {
   refresh();
 });
 
-$$(".tab").forEach(t => t.addEventListener("click", () => {
-  if (t.disabled) return;
-  tab = t.dataset.tab;
-  renderForms();
-}));
+/* --- stages --- */
+function followPod() {
+  // open on what the pod is for; with no pod, on the library's last mesh ready to print
+  if (picked) return;
+  const want = can("concept") ? "concept" : can("mesh") ? "mesh" : (stage || "print");
+  if (want !== stage) setStage(want, false);
+}
+function setStage(name, byUser) {
+  stage = name;
+  if (byUser) picked = true;
+  if (name === "print") queuePrint();
+  render();
+}
+function renderStages() {
+  for (const tab of $$(".stagetab")) {
+    const name = tab.dataset.stage, here = can(name);
+    tab.setAttribute("aria-selected", String(name === stage));
+    tab.classList.toggle("here", here);
+    $("span", tab).textContent = name === "print" ? "on this PC, no pod"
+      : here ? "this pod" : ready() ? "needs another pod" : "needs a pod";
+  }
+}
+$$(".stagetab").forEach(t => t.addEventListener("click", () => setStage(t.dataset.stage, true)));
 
-/* --- images for "Image -> mesh" --- */
-const drop = $("#drop"), picker = $("#files");
-// what kami-server reads (jobs.IMAGE_SUFFIXES); HEIC and TIFF go as they are even where
-// the browser cannot show their thumbnail
+/* why a stage cannot make anything right now, and the way out */
+function blocked(name) {
+  const p = pod && pod.pod, what = name === "mesh" ? "meshes" : "concepts";
+  const box = el("div", {class: "blocked"});
+  const fitting = ((pod && pod.profiles) || []).filter(x => x[name]).map(x => x.name);
+  if (p && !pod.ready) {
+    box.append(el("p", {class: "dim", text: "The pod is starting. This unlocks when it is ready."}), command("kami status"));
+    return box;
+  }
+  if (p) {
+    box.append(el("p", {text: "The active pod (" + (p.profile || "pod") + ") does not make " + what + "."}),
+               el("p", {class: "dim", text: "One pod at a time: delete it, then start one that does. In a terminal:"}));
+    fitting.slice(0, 4).forEach(n => box.append(command("kami down; kami up -p " + n)));
+  } else {
+    box.append(el("p", {text: "No pod is running, so nothing is billing."}),
+               el("p", {class: "dim", text: "This page never starts one. To make " + what + ", in a terminal:"}));
+    fitting.slice(0, 4).forEach(n => box.append(command("kami up -p " + n)));
+  }
+  if (!fitting.length) box.append(command(name === "mesh" ? "kami up -p pixal3d" : "kami up -p views-qwen"));
+  box.append(el("p", {class: "dim", text: "The library below and the Print stage work without a pod."}));
+  return box;
+}
+
+/* --- pictures: reading, slots --- */
 const IMAGE_NAME = /\.(png|jpe?g|webp|avif|heic|heif|tiff?|bmp|gif)$/i;
 const IMAGE_TYPE = /^image\/(png|jpeg|webp|avif|heic|heif|tiff|bmp|gif)$/;
-function addFiles(list) {
-  for (const file of list) {
-    if (!IMAGE_NAME.test(file.name) && !IMAGE_TYPE.test(file.type)) continue;
-    if (images.length >= 20) break;
+function readPicture(file) {
+  return new Promise((done, fail) => {
+    if (!IMAGE_NAME.test(file.name) && !IMAGE_TYPE.test(file.type)) return fail(new Error(file.name + " is not a picture"));
     const reader = new FileReader();
-    reader.onload = () => {
-      const name = IMAGE_NAME.test(file.name) ? file.name
-                 : "pasted." + (file.type.split("/")[1] || "png").replace("jpeg", "jpg");
-      images.push({name, data: String(reader.result).split(",")[1], url: URL.createObjectURL(file), view: ""});
-      renderThumbs();
-    };
+    reader.onload = () => done({
+      name: IMAGE_NAME.test(file.name) ? file.name : "pasted." + (file.type.split("/")[1] || "png").replace("jpeg", "jpg"),
+      data: String(reader.result).split(",")[1], url: URL.createObjectURL(file)});
+    reader.onerror = () => fail(new Error("Could not read " + file.name));
     reader.readAsDataURL(file);
-  }
-}
-function renderThumbs() {
-  const box = $("#thumbs");
-  box.innerHTML = "";
-  images.forEach((img, i) => {
-    const el = document.createElement("div");
-    el.className = "thumb";
-    el.title = img.name;
-    const pic = document.createElement("img");
-    pic.src = img.url; pic.alt = img.name;
-    // HEIC / TIFF: sent as they are, but most browsers cannot draw them
-    pic.addEventListener("error", () => {
-      const label = document.createElement("span");
-      label.className = "thumb-name"; label.textContent = img.name;
-      pic.replaceWith(label);
-    });
-    const x = document.createElement("button");
-    x.type = "button"; x.textContent = "×"; x.setAttribute("aria-label", "Remove " + img.name);
-    x.addEventListener("click", () => { URL.revokeObjectURL(img.url); images.splice(i, 1); renderThumbs(); });
-    el.append(pic, x);
-    const names = served().view_names;
-    if (asViews() && names) {
-      // Hunyuan3D-2mv tells the views apart by name
-      const pick = document.createElement("select");
-      pick.setAttribute("aria-label", "View of " + img.name);
-      pick.append(new Option("auto", ""));
-      names.forEach(n => pick.append(new Option(n, n, false, img.view === n)));
-      pick.addEventListener("change", () => { img.view = pick.value; });
-      el.append(pick);
-    }
-    box.append(el);
   });
-  renderViews();
 }
-function asViews() { return $("#as-views").checked && !$("#as-views").disabled; }
-function renderViews() {
-  const s = served(), most = s.max_views || 0, toggle = $("#as-views"), note = $("#views-note");
-  toggle.disabled = most < 2;
-  $("#views-label").title = most < 2 ? "This pod's model makes a mesh from one image" : "";
-  $("#mode-label").hidden = !(asViews() && s.multiview_modes);
-  note.hidden = !asViews();
-  if (asViews()) {
-    note.textContent = s.view_names
-      ? "Up to " + most + " views, named " + s.view_names.join(", ") + " (auto takes them in that order)."
-      : "Up to " + most + " views. Experimental on TRELLIS.2: consistent views (same light, size and centring) work best.";
+function pictureBody(p) { return p.file ? {file: p.file} : {name: p.name, data: p.data}; }
+function pictureUrl(p) { return p.file ? fileUrl(p.file) : p.url; }
+function slotNames() {
+  const s = served(), most = s.max_views || 1;
+  if (most < 2) return ["front"];
+  const names = s.view_names && s.view_names.length ? s.view_names : VIEW_ORDER;
+  return VIEW_ORDER.filter(n => names.includes(n)).concat(names.filter(n => !VIEW_ORDER.includes(n))).slice(0, most);
+}
+function fillSlots(o) {
+  for (const k of Object.keys(slots)) delete slots[k];
+  if (!o) return renderSlots();
+  for (const [view, file] of Object.entries(o.views)) slots[view] = {file};
+  if (!slots.front && o.images[0]) slots.front = {file: o.images[0]};
+  renderSlots();
+}
+function pickFile(multiple, then) {
+  const input = el("input", {type: "file", accept: ".png,.jpg,.jpeg,.webp,.avif,.heic,.heif,.tif,.tiff,.bmp,.gif",
+                             multiple: multiple});
+  input.addEventListener("change", async () => {
+    for (const f of input.files) { try { then(await readPicture(f)); } catch (e) {} }
+  });
+  input.click();
+}
+function renderSlots() {
+  const box = $("#slots");
+  if (!box) return;
+  box.innerHTML = "";
+  for (const name of slotNames()) {
+    const p = slots[name];
+    const slot = el("div", {class: "slot" + (p ? " filled" : ""), role: "button", tabindex: "0",
+                            title: p ? "Replace the " + name + " view" : "Add the " + name + " view"});
+    const put = pic => { slots[name] = pic; renderSlots(); };
+    slot.addEventListener("click", e => { if (!e.target.closest(".x")) pickFile(false, put); });
+    slot.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pickFile(false, put); } });
+    slot.addEventListener("dragover", e => { e.preventDefault(); slot.classList.add("over"); });
+    slot.addEventListener("dragleave", () => slot.classList.remove("over"));
+    slot.addEventListener("drop", async e => {
+      e.preventDefault(); slot.classList.remove("over");
+      if (e.dataTransfer.files[0]) { try { put(await readPicture(e.dataTransfer.files[0])); } catch (err) {} }
+    });
+    if (p) {
+      const img = el("img", {src: pictureUrl(p), alt: name + " view"});
+      slot.append(img, el("button", {type: "button", class: "x", "aria-label": "Remove the " + name + " view", text: "×",
+                                     onclick: () => { delete slots[name]; renderSlots(); }}));
+    }
+    slot.append(el("span", {class: "tag", text: name}));
+    if (!p) slot.prepend("+");
+    box.append(slot);
   }
-  const button = $('[data-form="mesh"] .primary');
-  button.textContent = asViews() ? "Make 1 mesh from " + images.length + " views"
-                     : images.length > 1 ? "Make " + images.length + " meshes" : "Make mesh";
+  const count = slotNames().filter(n => slots[n]).length, button = $("#mesh-go");
+  if (button && meshMode === "views") button.textContent = count > 1 ? "Make mesh from " + count + " views" : "Make mesh";
 }
-$("#as-views").addEventListener("change", renderThumbs);
-drop.addEventListener("click", () => picker.click());
-drop.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); picker.click(); } });
-picker.addEventListener("change", () => { addFiles(picker.files); picker.value = ""; });
-drop.addEventListener("dragover", e => { e.preventDefault(); drop.classList.add("over"); });
-drop.addEventListener("dragleave", () => drop.classList.remove("over"));
-drop.addEventListener("drop", e => { e.preventDefault(); drop.classList.remove("over"); addFiles(e.dataTransfer.files); });
-document.addEventListener("paste", e => {
-  if (tab !== "mesh" || !ready()) return;
-  const files = [...(e.clipboardData || {}).items || []].filter(i => i.kind === "file").map(i => i.getAsFile());
-  if (files.length) addFiles(files);
-});
+function renderLoose() {
+  const box = $("#loose");
+  if (!box) return;
+  box.innerHTML = "";
+  loose.forEach((p, i) => box.append(el("div", {class: "thumb", title: p.name},
+    el("img", {src: p.url, alt: p.name}),
+    el("button", {type: "button", "aria-label": "Remove " + p.name, text: "×",
+                  onclick: () => { URL.revokeObjectURL(p.url); loose.splice(i, 1); renderLoose(); }}))));
+  const button = $("#mesh-go");
+  if (button && meshMode === "each") button.textContent = loose.length > 1 ? "Make " + loose.length + " meshes" : "Make mesh";
+}
 
-/* --- sending --- */
+/* --- controls shared by forms --- */
+function field(label, input) { return el("label", {class: "field"}, label, input); }
+function number(name, placeholder, attrs) {
+  return el("input", Object.assign({type: "number", name, placeholder: placeholder == null ? "" : String(placeholder)}, attrs || {}));
+}
 function num(form, name) {
-  const el = form.elements[name];
-  if (!el || el.value === "") return undefined;
-  return Number(el.value);
+  const input = form.elements[name];
+  return !input || input.value === "" ? undefined : Number(input.value);
 }
-function meshParams(form) {
-  return {seed: num(form, "seed"), texture_size: num(form, "texture_size"),
-          decimation_target: num(form, "decimation_target"), remesh: form.elements.remesh.checked};
+function hintControls() {
+  if (!hint) return null;
+  return el("div", {class: "row"},
+    el("label", {class: "check", title: "Adds to the prompt: standing on a flat base, one thick piece, flat colours, matte"},
+       el("input", {type: "checkbox", name: "for_print", checked: true}), "Made for printing"),
+    field("Colours", number("hint_colors", "", {min: "1", max: "8", value: String(hintColors), style: "width:72px"})));
 }
-function imageParams(form) {
-  return {seed: num(form, "seed"), steps: num(form, "steps"), guidance: num(form, "guidance"),
-          width: num(form, "width"), height: num(form, "height")};
+function hintBody(form) {
+  if (!hint) return {};
+  return form.elements.for_print.checked ? {colors: num(form, "hint_colors") || hintColors} : {print_hint: false};
 }
-
-$$(".form").forEach(form => form.addEventListener("submit", async e => {
-  e.preventDefault();
-  const kind = form.dataset.form, notice = $("[data-notice]", form), button = $(".primary", form);
-  let body;
-  if (kind === "mesh") {
-    if (!images.length) { notice.className = "notice bad"; notice.textContent = "Add an image first"; return; }
-    const views = asViews(), most = served().max_views || 1;
-    if (views && images.length > most) {
-      notice.className = "notice bad"; notice.textContent = "At most " + most + " views on this pod"; return;
-    }
-    const params = meshParams(form);
-    if (views && form.elements.multiview_mode.value) params.multiview_mode = form.elements.multiview_mode.value;
-    body = {kind, views, images: images.map(i => ({name: i.name, data: i.data, view: views ? i.view || null : null})),
-            params};
-  } else if (kind === "image") {
-    body = {kind, prompt: form.elements.prompt.value, count: num(form, "count") || 1, params: imageParams(form)};
-  } else if (kind === "views") {
-    const file = form.elements.front.files[0];
-    const angles = [...form.querySelectorAll('[name="angle"]:checked')].map(i => i.value);
-    if (!angles.length) { notice.className = "notice bad"; notice.textContent = "Pick at least one view"; return; }
-    if (!file && !form.elements.prompt.value.trim()) {
-      notice.className = "notice bad"; notice.textContent = "Write the concept, or give a front picture"; return;
-    }
-    body = {kind, prompt: form.elements.prompt.value, angles,
-            params: {seed: num(form, "seed"), steps: num(form, "steps"), guidance: num(form, "guidance"),
-                     lora_scale: num(form, "lora_scale")}};
-    if (file) {
-      const data = await new Promise((done, fail) => {
-        const reader = new FileReader();
-        reader.onload = () => done(String(reader.result).split(",")[1]);
-        reader.onerror = () => fail(new Error("Could not read " + file.name));
-        reader.readAsDataURL(file);
-      });
-      body.front = {name: file.name, data};
-    }
-  } else {
-    const seed = num(form, "seed");
-    body = {kind, prompt: form.elements.prompt.value,
-            params: {image: {seed}, mesh: {...meshParams(form), seed}}};
-  }
-  button.disabled = true;
+async function send(form, body, after) {
+  const notice = $("[data-notice]", form), buttons = $$("button", form);
   notice.className = "notice";
   notice.textContent = "Sending…";
+  buttons.forEach(b => b.disabled = true);
   try {
     const r = await post("api/jobs", body);
-    notice.textContent = r.jobs.length > 1 ? r.jobs.length + " jobs sent" : "Sent";
-    if (kind === "mesh") { images.forEach(i => URL.revokeObjectURL(i.url)); images.length = 0; renderThumbs(); }
+    notice.textContent = (r.jobs.length > 1 ? r.jobs.length + " jobs sent" : "Sent") + ": follow it under Jobs";
+    if (after) after();
     refresh();
   } catch (err) {
     notice.className = "notice bad";
     notice.textContent = err.message;
   } finally {
-    button.disabled = false;
+    buttons.forEach(b => b.disabled = false);
   }
-}));
+}
+function fail(form, text) {
+  const notice = $("[data-notice]", form);
+  notice.className = "notice bad";
+  notice.textContent = text;
+}
+
+/* --- Concept: text or a picture -> the views of one object --- */
+function conceptControls() {
+  const s = served(), views = !!s.views_model, images = !!s.image_model, o = obj(), front = frontOf(o);
+  const form = el("form", {});
+  const vd = s.views_defaults || {}, idf = s.image_defaults || {};
+  form.append(el("h3", {text: views ? "An object, seen from its sides" : "A picture of the object"}));
+  const source = el("select", {name: "source"});
+  if (images || s.views_from_prompt) source.append(new Option("From a description", "text"));
+  if (views) {
+    if (front) source.append(new Option("From the picture on the stage", "stage"));
+    source.append(new Option("From a picture of mine", "upload"));
+  }
+  const prompt = el("textarea", {name: "prompt", placeholder: "a ceramic owl", "aria-label": "Description"});
+  const upload = el("input", {type: "file", name: "front", accept: ".png,.jpg,.jpeg,.webp,.avif,.heic,.heif,.tif,.tiff,.bmp,.gif"});
+  const hints = hintControls();
+  const sync = () => {
+    prompt.hidden = source.value !== "text";
+    upload.hidden = source.value !== "upload";
+    if (hints) hints.hidden = source.value !== "text";
+  };
+  source.addEventListener("change", sync);
+  if (source.options.length > 1) form.append(field("Start", source));
+  form.append(prompt, upload, hints);
+  if (views) {
+    const angles = (s.view_angles && s.view_angles.length ? s.view_angles : VIEW_ORDER).filter(a => a !== "front");
+    const usual = vd.views || ["left", "back", "right"];
+    form.append(el("div", {}, el("div", {class: "dim", text: "Turn the camera to"}),
+      el("div", {class: "chips", style: "margin-top:6px"}, VIEW_ORDER.filter(a => angles.includes(a)).map(a =>
+        el("label", {}, el("input", {type: "checkbox", name: "angle", value: a, checked: usual.includes(a)}), a)))));
+  }
+  const advanced = el("div", {class: "row"}, field("Seed", number("seed", "random")),
+    field("Steps", number("steps", (views ? vd.steps : idf.steps) ?? "default", {min: "1"})),
+    field("Guidance", number("guidance", (views ? vd.guidance : idf.guidance) ?? "default", {step: "0.1", min: "0"})),
+    views ? field("LoRA weight", number("lora_scale", vd.lora_scale ?? 0.9, {step: "0.05", min: "0", max: "1.5"})) : null);
+  form.append(el("details", {}, el("summary", {text: "Advanced"}), advanced));
+  const actions = el("div", {class: "actions"});
+  if (views) actions.append(el("button", {type: "submit", class: "btn primary", value: "views", text: "Make views"}));
+  if (images) {
+    actions.append(el("button", {type: "submit", class: "btn" + (views ? "" : " primary"), value: "image",
+                                 text: views ? "Try fronts" : "Make pictures"}),
+                   field("How many", number("count", "", {min: "1", max: "8", value: views ? "4" : "1", style: "width:72px"})));
+  }
+  form.append(actions, el("div", {class: "notice", "data-notice": ""}));
+  if (views && images) form.append(el("p", {class: "dim", text:
+    "Try fronts makes quick candidates. Pick one in the library, then make its views from the picture on the stage."}));
+  form.addEventListener("submit", async e => {
+    e.preventDefault();
+    const kind = (e.submitter && e.submitter.value) || (views ? "views" : "image");
+    const params = {seed: num(form, "seed"), steps: num(form, "steps"), guidance: num(form, "guidance")};
+    const text = prompt.value.trim(), from = source.value || "text";
+    if (kind === "image") {
+      if (!text || from !== "text") return fail(form, "Describe the object to try fronts of it");
+      return send(form, Object.assign({kind: "image", prompt: text, count: num(form, "count") || 1, params}, hintBody(form)));
+    }
+    const angles = $$('[name="angle"]:checked', form).map(i => i.value);
+    if (!angles.length) return fail(form, "Pick at least one side to turn to");
+    params.lora_scale = num(form, "lora_scale");
+    const body = {kind: "views", angles, params};
+    if (from === "text") {
+      if (!text) return fail(form, "Describe the object first");
+      Object.assign(body, {prompt: text}, hintBody(form));
+    } else if (from === "stage") {
+      body.front = {file: front};
+    } else {
+      if (!upload.files[0]) return fail(form, "Choose the picture of its front");
+      try { body.front = pictureBody(await readPicture(upload.files[0])); } catch (err) { return fail(form, err.message); }
+    }
+    send(form, body);
+  });
+  sync();
+  return form;
+}
+function redoView(o, view, button) {
+  button.disabled = true;
+  button.textContent = "Sent";
+  post("api/jobs", {kind: "views", angles: [view], front: {file: o.views.front || frontOf(o)}, params: {}})
+    .then(refresh).catch(e => { button.textContent = e.message; });
+}
+function conceptStage(box) {
+  const o = obj();
+  if (!o || (!Object.keys(o.views).length && !o.images.length)) {
+    box.append(el("div", {class: "viewer"}, el("p", {text: o ? "This object has no pictures, only a mesh."
+      : "Describe an object on the left. Its front and its sides appear here, and stay in the library below."})));
+    return;
+  }
+  const names = VIEW_ORDER.filter(v => o.views[v]);
+  const canRedo = can("concept") && !!served().views_model && !!frontOf(o);
+  const tiles = el("div", {class: "views"});
+  for (const v of names) {
+    const cap = el("figcaption", {}, el("span", {text: v}));
+    if (canRedo && v !== "front") {
+      const again = el("button", {type: "button", class: "btn small", text: "Redo", title: "Make this view again from the front"});
+      again.addEventListener("click", () => redoView(o, v, again));
+      cap.append(again);
+    }
+    tiles.append(el("figure", {class: "view"}, el("img", {src: fileUrl(o.views[v]), alt: v + " view", loading: "lazy",
+                                                         onclick: () => lightbox(o.views[v])}), cap));
+  }
+  for (const file of o.images) {
+    tiles.append(el("figure", {class: "view"}, el("img", {src: fileUrl(file), alt: o.name, loading: "lazy",
+                                                         onclick: () => lightbox(file)}),
+                    el("figcaption", {}, el("span", {text: names.length ? "picture" : "front candidate"}))));
+  }
+  box.append(tiles);
+  if (names.length > 1) box.append(el("p", {class: "dim", text:
+    "Check that the back and the sides belong to the same object as the front before making the mesh: the mesh copies what it sees."}));
+  const next = el("div", {class: "next"});
+  if (can("mesh")) {
+    next.append(el("span", {class: "grow dim", text: "Next: the mesh, from these pictures."}),
+                el("button", {type: "button", class: "btn primary", text: "Make its mesh",
+                              onclick: () => { fillSlots(o); meshMode = "views"; setStage("mesh", true); }}));
+  } else {
+    const order = names.length ? names : ["front"];
+    const parts = order.map(v => (names.length ? v + "=" : "") + '"' + FOLDER.replace(/\\/g, "/") + "/" + (o.views[v] || o.images[0]) + '"');
+    next.append(el("div", {class: "grow"}, el("div", {class: "dim", text: "Next: the mesh, on a mesh pod. In a terminal:"}),
+                   command("kami mesh " + parts.join(" "))));
+  }
+  box.append(next);
+}
+
+/* --- Mesh: views -> GLB --- */
+function meshControls() {
+  const s = served(), most = s.max_views || 1, form = el("form", {}), md = s.mesh_defaults || {};
+  const modes = [];
+  if (most >= 2) modes.push(["views", "One object, its views"]);
+  modes.push(["each", most >= 2 ? "A mesh per picture" : "From pictures"]);
+  if (s.image_model) modes.push(["text", "From text"]);
+  if (!modes.some(m => m[0] === meshMode)) meshMode = modes[0][0];
+  form.append(el("h3", {text: "A mesh" + (s.mesh_model ? " with " + s.mesh_model.split("/").pop() : "")}));
+  if (modes.length > 1) {
+    form.append(el("div", {class: "seg", role: "group", "aria-label": "What to make it from"}, modes.map(([key, label]) =>
+      el("button", {type: "button", "aria-pressed": String(key === meshMode), text: label,
+                    onclick: () => { meshMode = key; controlsKey = ""; render(); }}))));
+  }
+  if (meshMode === "views") {
+    form.append(el("div", {class: "slots", id: "slots"}),
+      el("p", {class: "dim", text: s.view_names
+        ? "Each picture in the slot of the side it shows; the front is needed. Drop a picture on a slot, or pick an object in the library."
+        : "Up to " + most + " views of the same object: same light, size and centring work best."}));
+  } else if (meshMode === "each") {
+    const drop = el("div", {class: "drop", role: "button", tabindex: "0", text: "Drop pictures here, paste one, or click to choose"});
+    const add = pic => { if (loose.length < 20) { loose.push(pic); renderLoose(); } };
+    drop.addEventListener("click", () => pickFile(true, add));
+    drop.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pickFile(true, add); } });
+    drop.addEventListener("dragover", e => { e.preventDefault(); drop.classList.add("over"); });
+    drop.addEventListener("dragleave", () => drop.classList.remove("over"));
+    drop.addEventListener("drop", async e => {
+      e.preventDefault(); drop.classList.remove("over");
+      for (const f of e.dataTransfer.files) { try { add(await readPicture(f)); } catch (err) {} }
+    });
+    form.append(drop, el("div", {class: "thumbs", id: "loose"}));
+  } else {
+    form.append(el("textarea", {name: "prompt", placeholder: "a ceramic owl", "aria-label": "Description"}), hintControls(),
+                el("p", {class: "dim", text: "One picture is made from the text, then its mesh: the back is the model's guess."}));
+  }
+  const texture = el("select", {name: "texture_size"}, new Option(md.texture_size ? md.texture_size + " (default)" : "default", ""));
+  [1024, 2048, 4096].forEach(n => texture.append(new Option(String(n), String(n))));
+  const row = el("div", {class: "row"}, field("Seed", number("seed", "random")), field("Texture", texture),
+    field("Faces", number("decimation_target", md.decimation_target ?? "default", {min: "1000", step: "1000"})));
+  if (meshMode === "views" && s.multiview_modes) {
+    row.append(field("Views are", el("select", {name: "multiview_mode"}, s.multiview_modes.map(m => new Option(m, m)))));
+  }
+  form.append(el("details", {}, el("summary", {text: "Advanced"}), row,
+    el("label", {class: "check", style: "margin-top:10px"}, el("input", {type: "checkbox", name: "remesh", checked: md.remesh !== false}), "Remesh the surface")));
+  form.append(el("div", {class: "actions"}, el("button", {type: "submit", class: "btn primary", id: "mesh-go", text: "Make mesh"})),
+              el("div", {class: "notice", "data-notice": ""}));
+  form.addEventListener("submit", e => {
+    e.preventDefault();
+    const params = {seed: num(form, "seed"), texture_size: num(form, "texture_size"),
+                    decimation_target: num(form, "decimation_target"), remesh: form.elements.remesh.checked};
+    if (meshMode === "text") {
+      const text = form.elements.prompt.value.trim();
+      if (!text) return fail(form, "Describe the object first");
+      return send(form, Object.assign({kind: "text-to-mesh", prompt: text,
+                                       params: {image: {seed: params.seed}, mesh: params}}, hintBody(form)));
+    }
+    if (meshMode === "each") {
+      if (!loose.length) return fail(form, "Add a picture first");
+      return send(form, {kind: "mesh", views: false, images: loose.map(pictureBody), params},
+                  () => { loose.forEach(p => URL.revokeObjectURL(p.url)); loose.length = 0; renderLoose(); });
+    }
+    const used = slotNames().filter(n => slots[n]);
+    if (!used.length) return fail(form, "Add at least the front view");
+    if (s.view_names && !slots.front) return fail(form, "The front view is needed");
+    if (form.elements.multiview_mode) params.multiview_mode = form.elements.multiview_mode.value;
+    const named = !!s.view_names;
+    send(form, {kind: "mesh", views: used.length > 1,
+                images: used.map(n => Object.assign(pictureBody(slots[n]), {view: named ? n : null})), params});
+  });
+  return form;
+}
+function viewer(src, alt) {
+  return el("model-viewer", {src, alt, "camera-controls": true, "auto-rotate": true, "shadow-intensity": "1",
+                             exposure: "1", "interaction-prompt": "none"});
+}
+function strip(o) {
+  const files = VIEW_ORDER.filter(v => o.views[v]).map(v => o.views[v]).concat(o.images);
+  if (!files.length) return null;
+  return el("div", {class: "strip"}, files.map(f => el("img", {src: fileUrl(f), alt: "", loading: "lazy", onclick: () => lightbox(f)})));
+}
+function meshStage(box) {
+  const o = obj(), mesh = meshOf(o);
+  if (!mesh) {
+    box.append(el("div", {class: "viewer"}, el("p", {text: o ? "No mesh of this object yet."
+      : "The mesh appears here. Pick an object in the library, or put its views on the left."})));
+    if (o && strip(o)) box.append(strip(o));
+    return;
+  }
+  box.append(el("div", {class: "viewer"}, viewer(fileUrl(mesh.file), o.name)));
+  if (strip(o)) box.append(strip(o));
+  const others = o.meshes.slice(1);
+  box.append(el("div", {class: "next"},
+    el("span", {class: "grow dim"}, el("a", {href: fileUrl(mesh.file), download: "", text: mesh.file}), " · " + size(mesh.size),
+       others.length ? " · " + others.length + " older take" + (others.length > 1 ? "s" : "") : ""),
+    el("button", {type: "button", class: "btn primary", text: "Prepare for print", onclick: () => setStage("print", true)})));
+}
+
+/* --- Print: GLB -> 3MF, on this PC --- */
+function printControls() {
+  const form = el("form", {});
+  form.append(el("h3", {text: "A 3MF to print in colours"}),
+    el("div", {class: "row"},
+      field("Height (mm)", number("height", "", {min: "5", max: "400", step: "1", value: String(print.height)})),
+      field("Flat base (%)", number("base", "", {min: "0", max: "40", step: "0.5", value: String(print.base)}))));
+  const auto = print.mode === "auto";
+  form.append(el("div", {class: "seg", role: "group", "aria-label": "Colours"},
+    el("button", {type: "button", "aria-pressed": String(auto), text: "Find the colours",
+                  onclick: () => { print.mode = "auto"; controlsKey = ""; render(); queuePrint(); }}),
+    el("button", {type: "button", "aria-pressed": String(!auto), text: "My filaments",
+                  onclick: () => {
+                    print.mode = "mine";
+                    if (!print.palette.length) print.palette = ((print.result && print.result.colors) || []).map(c => c.hex.toLowerCase());
+                    if (!print.palette.length) print.palette = ["#ffffff", "#202020"];
+                    controlsKey = ""; render(); queuePrint();
+                  }})));
+  if (auto) {
+    form.append(el("div", {class: "row"},
+      field("How many filaments", number("colors", "", {min: "1", max: "16", step: "1", value: String(print.colors)}))),
+      el("p", {class: "dim", text: "The colours that describe the texture best. Fewer print faster and waste less in purges."}));
+  } else {
+    const box = el("div", {class: "swatches"});
+    print.palette.forEach((hex, i) => {
+      const input = el("input", {type: "color", value: hex, "aria-label": "Filament " + (i + 1)});
+      input.addEventListener("change", () => { print.palette[i] = input.value; queuePrint(); });
+      box.append(el("div", {class: "swatch"}, input, "slot " + (i + 1),
+        print.palette.length > 1 ? el("button", {type: "button", class: "x", "aria-label": "Remove filament " + (i + 1), text: "×",
+          onclick: () => { print.palette.splice(i, 1); controlsKey = ""; render(); queuePrint(); }}) : null));
+    });
+    if (print.palette.length < 16) {
+      box.append(el("button", {type: "button", class: "btn small", text: "+ Add",
+        onclick: () => { print.palette.push("#808080"); controlsKey = ""; render(); queuePrint(); }}));
+    }
+    form.append(box, el("p", {class: "dim", text: "In the order of your AMS slots: each part of the model takes the closest one."}));
+  }
+  const rebuild = el("select", {name: "rebuild"}, [["auto", "only if it is not a closed solid"], ["always", "always"], ["never", "never"]]
+    .map(([v, t]) => new Option(t, v, false, v === print.rebuild)));
+  form.append(el("details", {}, el("summary", {text: "Advanced"}), el("div", {class: "row"}, field("Rebuild the surface", rebuild),
+    field("Detail (mm)", number("detail", "", {min: "0.1", max: "2", step: "0.05", value: String(print.detail)})))));
+  form.append(el("div", {class: "actions"},
+    el("button", {type: "submit", class: "btn primary", id: "print-save", text: "Save 3MF"})),
+    el("div", {class: "notice", "data-notice": "", id: "print-notice"}));
+  form.addEventListener("change", () => {
+    print.height = num(form, "height") || print.height;
+    print.base = num(form, "base") ?? print.base;
+    if (form.elements.colors) print.colors = num(form, "colors") || print.colors;
+    print.rebuild = form.elements.rebuild.value;
+    print.detail = num(form, "detail") || print.detail;
+    queuePrint();
+  });
+  form.addEventListener("submit", e => { e.preventDefault(); runPrint(true); });
+  return form;
+}
+let printTimer = 0;
+function queuePrint() {
+  clearTimeout(printTimer);
+  printTimer = setTimeout(() => runPrint(false), 350);
+}
+async function runPrint(save) {
+  const mesh = meshOf(obj());
+  if (stage !== "print" || !mesh) return;
+  if (print.busy) { print.dirty = true; return; }
+  print.busy = true;
+  print.error = "";
+  stageKey = ""; renderStage();
+  const body = {file: mesh.file, height: print.height, base: print.base, rebuild: print.rebuild, detail: print.detail, save};
+  if (print.mode === "mine") body.palette = print.palette; else body.colors = print.colors;
+  try {
+    print.result = await post("api/print", body);
+    print.forFile = mesh.file;
+    if (save && print.result.saved) refreshObjects(true);
+  } catch (e) {
+    print.error = e.message;
+  }
+  print.busy = false;
+  stageKey = ""; renderStage();
+  const notice = $("#print-notice");
+  if (notice && save) {
+    notice.className = "notice" + (print.error ? " bad" : "");
+    notice.textContent = print.error || ("Saved " + print.result.saved + ": open it in Bambu Studio");
+  }
+  if (print.dirty) { print.dirty = false; runPrint(false); }
+}
+function printStage(box) {
+  const o = obj(), mesh = meshOf(o);
+  if (!mesh) {
+    box.append(el("div", {class: "viewer"}, el("p", {text: o ? "This object has no mesh yet: there is nothing to print."
+      : "Pick an object with a mesh in the library below. Preparing it for print runs on this PC: no pod, nothing billed."})));
+    return;
+  }
+  const r = print.forFile === mesh.file ? print.result : null;
+  const stageBox = el("div", {class: "viewer"});
+  if (r) stageBox.append(viewer(r.preview, o.name + ", painted"));
+  if (print.busy) stageBox.append(el("div", {class: "veil"}, el("span", {}, el("span", {class: "spin", style: "display:inline-block;margin-right:8px"}),
+    r ? "Updating…" : "Making it a solid on the plate…")));
+  else if (print.error) stageBox.append(el("div", {class: "veil"}, el("span", {class: "notice bad", text: print.error})));
+  else if (!r) stageBox.append(el("p", {text: "Preparing…"}));
+  box.append(stageBox);
+  if (!r) return;
+  const solid = r.closed ? "closed" + (r.rebuilt ? ", rebuilt" : "") : "not closed";
+  box.append(el("div", {class: "metrics"},
+    el("div", {class: "metric"}, el("small", {text: "Solid"}), el("b", {class: r.closed ? "ok" : "warn", text: solid})),
+    el("div", {class: "metric"}, el("small", {text: "Size (mm)"}), el("b", {text: r.size.join(" × ")})),
+    el("div", {class: "metric"}, el("small", {text: "Flat base"}), el("b", {text: r.base_area.toLocaleString() + " mm²"})),
+    el("div", {class: "metric"}, el("small", {text: "Triangles"}), el("b", {text: r.triangles.toLocaleString()}))));
+  box.append(el("ul", {class: "slotlist"}, r.colors.map((c, i) => el("li", {},
+    el("i", {style: "background:" + c.hex}), "Slot " + (i + 1) + " · " + c.hex + " · " + Math.round(c.share * 100) + "% of the surface"))));
+  const notes = r.warnings.slice();
+  if (r.rebuilt) notes.unshift("The surface was rebuilt to close it: detail under " + r.detail.toFixed(2) + " mm is lost");
+  if (notes.length) box.append(el("ul", {class: "warns"}, notes.map(w => el("li", {text: w.replace(/`/g, "")}))));
+  if (o.prints.length) {
+    box.append(el("div", {class: "next"}, el("span", {class: "grow dim"}, "Saved: ",
+      o.prints.map((p, i) => [i ? ", " : "", el("a", {href: fileUrl(p.file), download: "", text: p.file})]),
+      ". Give filaments 1 to " + r.colors.length + " these colours in the slicer.")));
+  }
+}
+
+/* --- rendering --- */
+function renderControls() {
+  const s = served();
+  const key = [stage, ready(), can(stage), meshMode, hint, print.mode, print.palette.length, JSON.stringify(s),
+               stage === "concept" ? (frontOf(obj()) || "") : "", pod && pod.pod ? pod.pod.profile : ""].join("|");
+  if (key === controlsKey) return;
+  controlsKey = key;
+  const box = $("#controls");
+  box.innerHTML = "";
+  if (stage === "print") box.append(printControls());
+  else if (!can(stage)) box.append(blocked(stage));
+  else box.append(stage === "mesh" ? meshControls() : conceptControls());
+  renderSlots();
+  renderLoose();
+}
+function renderStage() {
+  const o = obj();
+  const key = [stage, current, o ? o.mtime : 0, can("mesh"), can("concept"), print.busy, print.error,
+               print.result && print.result.preview, print.forFile].join("|");
+  if (key === stageKey) return;
+  stageKey = key;
+  const box = $("#stage");
+  const full = box.classList.contains("full");
+  box.innerHTML = "";
+  const head = el("div", {class: "stagehead"}, el("h2", {text: o ? o.name : "Nothing on the stage"}));
+  if (o && o.folder) head.append(el("span", {class: "chip", text: o.folder}));
+  head.append(el("button", {type: "button", class: "btn small grow", text: full ? "Close" : "Full size", onclick: () => {
+    const on = box.classList.toggle("full");
+    document.body.classList.toggle("has-full", on);
+    stageKey = ""; renderStage();
+  }}));
+  box.append(head);
+  if (stage === "concept") conceptStage(box);
+  else if (stage === "mesh") meshStage(box);
+  else printStage(box);
+}
+function renderLibrary() {
+  const box = $("#library");
+  box.innerHTML = "";
+  $("#folder").textContent = FOLDER;
+  if (!objects.length) {
+    box.append(el("p", {class: "empty", text: "Nothing yet. What you make here, or with kami in a terminal, shows up as objects."}));
+    return;
+  }
+  for (const o of objects) {
+    const pic = frontOf(o), views = Object.keys(o.views).length;
+    const card = el("button", {type: "button", class: "obj", "aria-pressed": String(o.key === current), title: o.key});
+    const face = el("div", {class: "pic"});
+    if (pic) face.append(el("img", {src: fileUrl(pic), alt: "", loading: "lazy"}));
+    else if (meshOf(o)) {
+      // a mesh with no picture of its own: kami draws one (needs numpy on this PC)
+      const drawn = el("img", {src: "thumbs/" + meshOf(o).file.split("/").map(encodeURIComponent).join("/"), alt: "", loading: "lazy"});
+      drawn.addEventListener("error", () => drawn.replaceWith("mesh"));
+      face.append(drawn);
+    } else face.append("3MF");
+    card.append(face,
+      el("div", {class: "cap"}, el("span", {class: "name", text: o.name}), el("div", {class: "badges"},
+        views ? el("span", {class: "badge plain", text: views + (views > 1 ? " views" : " view")}) : null,
+        !views && o.images.length ? el("span", {class: "badge plain", text: "picture"}) : null,
+        o.meshes.length ? el("span", {class: "badge", text: "mesh"}) : null,
+        o.prints.length ? el("span", {class: "badge", text: "3MF"}) : null,
+        o.folder ? el("span", {class: "badge plain", text: o.folder}) : null)));
+    card.addEventListener("click", () => select(o.key, true));
+    box.append(card);
+  }
+}
+function select(key, byUser) {
+  current = key;
+  const o = obj();
+  fillSlots(o);
+  if (byUser && o) {
+    picked = true;
+    if (meshOf(o)) { if (stage === "concept") stage = "mesh"; }
+    else if (stage === "print" || (stage === "mesh" && !can("mesh"))) stage = "concept";
+    window.scrollTo({top: 0, behavior: "smooth"});
+  }
+  if (stage === "print") queuePrint();
+  render();
+}
+function render() {
+  if (!stage) return;
+  renderStages();
+  renderControls();
+  renderStage();
+  $$(".obj").forEach(c => c.setAttribute("aria-pressed", String(c.title === current)));
+}
+function lightbox(file) {
+  const box = el("div", {class: "lightbox", role: "dialog", "aria-label": file}, el("img", {src: fileUrl(file), alt: file}));
+  box.addEventListener("click", () => box.remove());
+  document.body.append(box);
+}
+document.addEventListener("keydown", e => {
+  if (e.key !== "Escape") return;
+  $$(".lightbox").forEach(b => b.remove());
+  if ($("#stage").classList.contains("full")) {
+    $("#stage").classList.remove("full");
+    document.body.classList.remove("has-full");
+    stageKey = ""; renderStage();
+  }
+});
+document.addEventListener("paste", async e => {
+  if (stage !== "mesh" || !can("mesh")) return;
+  const files = [...(e.clipboardData || {}).items || []].filter(i => i.kind === "file").map(i => i.getAsFile());
+  for (const f of files) {
+    try {
+      const pic = await readPicture(f);
+      if (meshMode === "views") { slots[slotNames().find(n => !slots[n]) || "front"] = pic; renderSlots(); }
+      else if (meshMode === "each") { loose.push(pic); renderLoose(); }
+    } catch (err) {}
+  }
+});
 
 /* --- jobs --- */
 const STATE_TEXT = {sending: "sending", queued: "queued", running: "on the GPU",
                     downloading: "downloading", done: "done", error: "failed"};
+function objectOfFile(file) {
+  return objects.find(o => Object.values(o.views).includes(file) || o.images.includes(file) ||
+                           o.meshes.some(m => m.file === file) || o.prints.some(p => p.file === file));
+}
 function renderJobs(list) {
   $("#jobs-section").hidden = !list.length;
   const ul = $("#jobs");
   ul.innerHTML = "";
   for (const j of list) {
-    const li = document.createElement("li");
-    li.className = "job";
-    const mark = document.createElement("span");
-    if (j.status === "done") { mark.className = "dot ready"; }
-    else if (j.status === "error") { mark.className = "dot bad"; }
-    else { mark.className = "spin"; }
-    const label = document.createElement("span");
-    label.className = "label"; label.textContent = j.label; label.title = j.label;
-    if (j.external) {
-      const from = document.createElement("span");
-      from.className = "from"; from.textContent = "terminal";
-      from.title = "Sent from a terminal or another kami ui; that one downloads its files";
-      label.append(from);
-    }
-    const state = document.createElement("span");
-    state.className = "state";
+    const li = el("li", {class: "job"});
+    const mark = el("span", {class: j.status === "done" ? "dot ready" : j.status === "error" ? "dot bad" : "spin"});
+    const label = el("span", {class: "label", text: j.label, title: j.label});
+    if (j.external) label.append(el("span", {class: "from", text: "terminal",
+      title: "Sent from a terminal or another kami ui; that one downloads its files"}));
     let text = STATE_TEXT[j.status] || j.status;
     if (j.status === "queued" && j.position) text += " #" + j.position;
     const end = j.finished || Date.now() / 1000;
-    state.textContent = text + (j.created ? " · " + Math.max(0, Math.round(end - j.created)) + " s" : "");
-    li.append(mark, label, state);
+    li.append(mark, label, el("span", {class: "state", text: text + (j.created ? " · " + Math.max(0, Math.round(end - j.created)) + " s" : "")}));
     if (j.status === "running" && typeof j.progress === "number") {
-      // stage and progress from the pod (servers with GET /v1/jobs)
       const pct = Math.round(Math.min(1, Math.max(0, j.progress)) * 100);
-      const box = document.createElement("div");
-      box.className = "progress";
-      const track = document.createElement("div");
-      track.className = "track";
-      track.setAttribute("role", "progressbar");
-      track.setAttribute("aria-valuenow", String(pct));
-      track.setAttribute("aria-valuemin", "0"); track.setAttribute("aria-valuemax", "100");
-      const fill = document.createElement("div");
-      fill.className = "fill"; fill.style.width = pct + "%";
-      track.append(fill);
-      const num = document.createElement("span");
-      num.className = "pct"; num.textContent = pct + "%";
-      const stage = document.createElement("span");
-      stage.className = "stage";
-      stage.textContent = (j.stage_label || "On the GPU") + (j.steps ? " · step " + j.step + "/" + j.steps : "");
-      box.append(track, num, stage);
-      li.append(box);
+      li.append(el("div", {class: "progress"},
+        el("div", {class: "track", role: "progressbar", "aria-valuenow": String(pct), "aria-valuemin": "0", "aria-valuemax": "100"},
+           el("div", {class: "fill", style: "width:" + pct + "%"})),
+        el("span", {class: "pct", text: pct + "%"}),
+        el("span", {class: "stagename", text: (j.stage_label || "On the GPU") + (j.steps ? " · step " + j.step + "/" + j.steps : "")})));
     }
-    const local = j.files && j.files.filter(f => !j.external || cardOf(f));
-    if (j.error || (local && local.length)) {
-      const detail = document.createElement("span");
-      detail.className = "detail" + (j.error ? " bad" : "");
-      if (j.error) detail.textContent = j.error;
-      else local.forEach((f, i) => {
+    const local = (j.files || []).filter(f => objectOfFile(f));
+    if (j.error) li.append(el("span", {class: "detail bad", text: j.error}));
+    else if (local.length) {
+      const detail = el("span", {class: "detail"});
+      local.forEach((f, i) => {
         if (i) detail.append(", ");
-        const a = document.createElement("a");
-        a.href = "files/" + encodeURIComponent(f); a.textContent = f;
-        a.title = "Preview";
-        // the preview opens here, in the gallery card (a .glb alone in a tab only downloads)
-        a.addEventListener("click", e => { e.preventDefault(); preview(f); });
-        detail.append(a);
+        detail.append(el("a", {href: fileUrl(f), text: f, title: "Put it on the stage",
+          onclick: e => { e.preventDefault(); const o = objectOfFile(f); if (o) select(o.key, true); }}));
       });
       li.append(detail);
     }
     ul.append(li);
   }
 }
-
-/* --- gallery --- */
-document.addEventListener("click", e => {
-  const b = e.target.closest(".grow");
-  if (!b) return;
-  const card = b.closest(".card"), full = !card.classList.contains("full");
-  $$(".card.full").forEach(c => c.classList.remove("full"));
-  card.classList.toggle("full", full);
-  document.body.classList.toggle("has-full", full);
-});
-document.addEventListener("keydown", e => {
-  if (e.key === "Escape") {
-    $$(".card.full").forEach(c => c.classList.remove("full"));
-    document.body.classList.remove("has-full");
+function followJobs(list) {
+  // what this page asked for goes on the stage when it arrives
+  for (const j of list) {
+    if (j.external || j.status !== "done" || doneJobs.has(j.id) || !(j.files || []).length) continue;
+    const o = objectOfFile(j.files.find(f => /\.glb$/i.test(f)) || j.files[0]);
+    if (!o) continue;                 // the library has not caught up yet: next round
+    doneJobs.add(j.id);
+    if ($("#stage").classList.contains("full")) continue;
+    current = o.key;
+    fillSlots(o);
+    if (meshOf(o) && stage === "concept" && j.kind !== "views" && j.kind !== "image") stage = "mesh";
+    render();
   }
-});
-function showFull(card) {
-  $$(".card.full").forEach(c => c.classList.remove("full"));
-  card.classList.add("full");
-  document.body.classList.add("has-full");
-}
-function cardOf(name) {
-  // the card of a result, or of the mesh it is the source image of
-  return $$("#gallery .card").find(c => c.dataset.name === name) ||
-         $$("#gallery .card").find(c => [...c.querySelectorAll(".meta a")].some(a => a.textContent === name));
-}
-async function preview(name) {
-  let card = cardOf(name);
-  if (!card) {                       // finished a moment ago: the gallery has not caught up yet
-    document.body.classList.remove("has-full");
-    await refreshGallery();
-    card = cardOf(name);
-  }
-  if (card) showFull(card);
-  else window.open("files/" + encodeURIComponent(name), "_blank");
-}
-async function refreshGallery() {
-  if (document.body.classList.contains("has-full")) return false;   // not under the user's eyes
-  const r = await fetch("api/gallery", {cache: "no-store"});
-  if (!r.ok) return false;
-  $("#gallery").innerHTML = await r.text();
-  return true;
 }
 
 /* --- polling --- */
-let busy = false;
+async function refreshObjects(force) {
+  const r = await fetch("api/objects", {cache: "no-store"});
+  if (!r.ok) return;
+  const data = await r.json();
+  objects = data.objects || [];
+  signature = data.signature;
+  if (current && !obj()) current = null;
+  if (!current && objects.length) {
+    // the newest thing made that the open stage can show
+    const first = (stage === "print" ? objects.find(o => meshOf(o)) : null) || objects[0];
+    current = first.key;
+    fillSlots(first);
+    if (stage === "print") queuePrint();
+  }
+  renderLibrary();
+  render();
+}
+let busy = false, first = true;
 async function refresh() {
   if (busy) return;
   busy = true;
@@ -682,14 +1081,19 @@ async function refresh() {
     if (r.ok) {
       const s = await r.json();
       pod = s.pod;
+      hint = !!s.print_hint;
+      hintColors = s.print_colors || 4;
+      if (first) { print.colors = hintColors; first = false; }
       renderPod();
-      renderForms();
-      renderViews();
+      followPod();
+      if (!stage) setStage("print", false);
+      if (s.signature !== signature) await refreshObjects();
       renderJobs(s.jobs || []);
-      if (s.signature !== signature && await refreshGallery()) signature = s.signature;
+      followJobs(s.jobs || []);
+      render();
     }
   } catch (e) {
-    $("#pod-what").textContent = "kami ui stopped (run it again in a terminal)";
+    $("#pod-mode").textContent = "kami ui stopped (run it again in a terminal)";
     $("#pod-dot").className = "dot bad";
   } finally {
     busy = false;

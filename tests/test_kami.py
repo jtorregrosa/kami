@@ -1667,7 +1667,7 @@ class VastBilling(unittest.TestCase):
 
 
 class WebUI(unittest.TestCase):
-    """`kami ui`: the gallery, the local server, its guards, and the jobs it relays."""
+    """`kami ui`: the library, the local server, its guards, and the jobs it relays."""
 
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
@@ -1687,37 +1687,83 @@ class WebUI(unittest.TestCase):
         self.backend.target.return_value = ("https://pod", "pod-secret-key")
         self.backend.down.return_value = {"pod_id": "p1", "session_cost_estimate": 0.42}
 
-    # --- gallery ---
+    # --- the library ---
 
-    def test_a_mesh_and_its_image_share_a_card(self):
-        cards = webui.cards(self.folder)
-        self.assertEqual([c["name"] for c in cards], ["cat.png", "owl.glb", "chair.glb"])
-        self.assertEqual((cards[1]["kind"], cards[1]["source"]), ("mesh", "owl.png"))
-        self.assertIsNone(cards[2]["source"])
+    def put(self, name, mtime=400):
+        path = self.folder / name
+        path.parent.mkdir(exist_ok=True)
+        path.write_bytes(b"x" * 10)
+        os.utime(path, (mtime, mtime))
+        return path
 
-    def test_page_escapes_names_and_fills_once(self):
-        (self.folder / "a&b'c.png").write_bytes(b"x")
+    def test_the_library_is_grouped_by_object(self):
+        for name, mtime in (("robot-front.png", 400), ("robot-left.png", 401), ("robot-left-2.png", 402),
+                            ("robot-back-left.png", 403), ("robot-front.glb", 404), ("robot-front.3mf", 405),
+                            ("tidy/vase.glb", 10)):
+            self.put(name, mtime)
+        os.utime(self.folder / "sub" / "hidden.png", (5, 5))
+        found = webui.objects(self.folder)
+        self.assertEqual([o["key"] for o in found], ["robot", "cat", "owl", "chair", "tidy/vase", "sub/hidden"])
+        robot = found[0]
+        self.assertEqual(robot["views"], {"front": "robot-front.png", "left": "robot-left-2.png",   # the newest take
+                                          "back-left": "robot-back-left.png"})
+        self.assertEqual([m["file"] for m in robot["meshes"]], ["robot-front.glb"])                 # named after its front
+        self.assertEqual([m["file"] for m in robot["prints"]], ["robot-front.3mf"])
+        owl = found[2]
+        self.assertEqual((owl["images"], owl["meshes"][0]["file"], owl["views"]), (["owl.png"], "owl.glb", {}))
+        self.assertEqual((found[4]["folder"], found[4]["name"]), ("tidy", "vase"))
+        self.assertNotIn("notes", [o["name"] for o in found])
+
+    def test_only_results_resolve(self):
+        self.put("tidy/vase.glb")
+        self.put("tidy/deep/too.png")
+        self.put(".kami/secret.png")
+        for name in ("owl.glb", "tidy/vase.glb", "sub/hidden.png"):
+            self.assertIsNotNone(webui.resolve(self.folder, name), name)
+        for name in ("notes.txt", "../owl.png", "tidy/../owl.glb", "tidy/deep/too.png", ".kami/secret.png",
+                     "tidy\\vase.glb", "", "/owl.glb", "owl.glb/", "missing.png", None, 7):
+            self.assertIsNone(webui.resolve(self.folder, name), name)
+
+    def test_page_is_filled_once_and_names_no_file(self):
         (self.folder / "{{TOKEN}}.png").write_bytes(b"x")
         page = webui.page(self.folder, "tok123")
-        self.assertIn('src="files/owl.glb"', page)
-        self.assertIn('poster="files/owl.png"', page)
-        self.assertIn("a&amp;b&#x27;c.png", page)
-        self.assertIn('src="files/a%26b%27c.png"', page)
-        self.assertNotIn("a&b'c.png", page)
         self.assertIn('content="tok123"', page)
-        self.assertIn("{{TOKEN}}.png", page)                  # a name, not filled in
-        self.assertNotIn("notes.txt", page)
+        self.assertNotIn("{{", page)
+        self.assertNotIn("owl.glb", page)                     # the library comes from /api/objects
         self.assertIn(webui.MODEL_VIEWER, page)
+        for stage in ("Concept", "Mesh", "Print"):
+            self.assertIn(f"<b>{stage}</b>", page)
 
     def test_signature_changes_with_a_new_result(self):
         before = webui.signature(self.folder)
         (self.folder / "new.glb").write_bytes(b"y")
         self.assertNotEqual(webui.signature(self.folder), before)
+        again = webui.signature(self.folder)
+        self.put("sub/more.3mf")
+        self.assertNotEqual(webui.signature(self.folder), again)
 
     def test_empty_folder(self):
         with tempfile.TemporaryDirectory() as empty:
-            self.assertIn("No results yet", webui.gallery(Path(empty)))
+            self.assertEqual(webui.objects(Path(empty)), [])
         self.assertEqual(webui.results(self.folder / "missing"), [])
+
+    def test_pictures_can_come_from_the_library(self):
+        self.put("robot-front.png")
+        self.put("robot-left.png")
+        mesh, = webui.build_bodies({"kind": "mesh", "views": True, "images": [
+            {"file": "robot-front.png", "view": "front"}, {"file": "robot-left.png", "view": "left"}]},
+            folder=self.folder)
+        self.assertEqual(mesh[1]["name"], "robot-front")
+        self.assertEqual([i["view"] for i in mesh[1]["images"]], ["front", "left"])
+        self.assertEqual(base64.b64decode(mesh[1]["images"][0]["image"]), b"x" * 10)
+        views, = webui.build_bodies({"kind": "views", "angles": ["back"], "front": {"file": "robot-front.png"}},
+                                    folder=self.folder)
+        self.assertEqual((views[1]["name"], views[1]["params"]["views"]), ("robot", ["back"]))
+        for bad in ("notes.txt", "../x.png", "owl.glb", "missing.png"):
+            with self.assertRaisesRegex(ValueError, "not a picture in the library"):
+                webui.build_bodies({"kind": "mesh", "images": [{"file": bad}]}, folder=self.folder)
+        with self.assertRaisesRegex(ValueError, "not a picture in the library"):
+            webui.build_bodies({"kind": "mesh", "images": [{"file": "robot-front.png"}]})    # no library given
 
     # --- requests from the page ---
 
@@ -1839,11 +1885,15 @@ class WebUI(unittest.TestCase):
         self.start()
         status, kind, body = self.call("GET", "/")
         self.assertEqual((status, kind), (200, "text/html; charset=utf-8"))
-        self.assertIn(b"owl.glb", body)
+        self.assertIn(b"<b>Concept</b>", body)
         self.assertEqual(self.call("GET", "/files/owl.glb")[:2], (200, "model/gltf-binary"))
-        self.assertEqual(self.call("GET", "/api/gallery")[0], 200)
-        for path in ("/files/notes.txt", "/files/sub/hidden.png", "/files/..%2Fowl.png",
-                     "/files/sub%5Chidden.png", "/files/", "/elsewhere"):
+        self.assertEqual(self.call("GET", "/files/sub/hidden.png")[:2], (200, "image/png"))    # one folder deep
+        status, _, body = self.call("GET", "/api/objects")
+        listed = json.loads(body)
+        self.assertEqual((status, listed["signature"]), (200, webui.signature(self.folder)))
+        self.assertIn("owl", [o["key"] for o in listed["objects"]])
+        for path in ("/files/notes.txt", "/files/sub/deeper/x.png", "/files/..%2Fowl.png", "/thumbs/owl.png",
+                     "/files/sub%5Chidden.png", "/files/", "/elsewhere", "/preview/x.glb", "/thumbs/notes.txt"):
             self.assertEqual(self.call("GET", path)[0], 404, path)
         self.assertEqual(self.call("GET", "/", headers={"Host": "evil.example:80"})[0], 403)
         self.assertEqual(self.call("GET", "/", headers={"Host": f"localhost:{self.port[0]}"})[0], 200)
@@ -1852,8 +1902,11 @@ class WebUI(unittest.TestCase):
         self.start()
         status, _, body = self.call("GET", "/api/state")
         self.assertEqual(status, 200)
-        self.assertEqual(json.loads(body)["pod"]["pod"]["id"], "p1")
+        state = json.loads(body)
+        self.assertEqual(state["pod"]["pod"]["id"], "p1")
         self.assertNotIn(b"pod-secret-key", body)
+        self.assertEqual(state["print_colors"], jobs.PRINT_COLORS)
+        self.assertIs(state["print_hint"], True)              # a Mock backend has one
 
     def test_only_the_page_can_act(self):
         self.start()
@@ -1908,13 +1961,18 @@ class WebUI(unittest.TestCase):
                 mock.patch.object(cli, "status_info", return_value=info), \
                 mock.patch.object(jobs, "info", return_value={"mesh_model": "m", "image_model": None,
                                                               "secret": "x"}) as served:
-            backend = cli.WebBackend(mock.Mock())
+            cfg = config.load_config()
+            backend = cli.WebBackend(cfg)
             first = backend.status()
             backend.status()
         self.assertNotIn("url", first["pod"])
         self.assertEqual(first["served"]["mesh_model"], "m")
         self.assertNotIn("secret", first["served"])
         served.assert_called_once()                       # cached per pod
+        # which profile makes what, for the page to say how to get to another stage
+        stages = {p["name"]: (p["concept"], p["mesh"]) for p in first["profiles"]}
+        self.assertEqual(set(stages), set(cfg.profiles))
+        self.assertIn((False, True), stages.values())
 
 
 class Reload(unittest.TestCase):
@@ -2924,3 +2982,62 @@ gpus = ["RTX 4090"]
                          ("hunyuan", "hunyuan3d-dit-v2-mv", "tencent/Hunyuan3D-2"))
         trellis = pod.server_spec(cfg, cfg.profiles["main"], None, "key")[0]
         self.assertNotIn("KAMI_MESH_BACKEND", trellis)
+
+
+class PrintHintTests(unittest.TestCase):
+    """Prompts get a hint so the picture is of something printable (jobs.PRINT_HINT)."""
+
+    def test_the_hint_follows_the_prompt(self):
+        sent = jobs.printable("a ceramic owl", jobs.PRINT_HINT)
+        self.assertTrue(sent.startswith("a ceramic owl, designed as"))
+        for said in ("flat base", "one solid piece", "4 flat solid colours", "matte"):
+            self.assertIn(said, sent)
+        self.assertIn("2 flat solid colours", jobs.printable("owl", jobs.PRINT_HINT, 2))
+        self.assertNotIn("{", sent)
+        self.assertEqual(jobs.printable("owl", ""), "owl")
+        self.assertEqual(jobs.printable("owl", "  "), "owl")
+        self.assertEqual(jobs.printable("owl", "low poly {like} this, {colors} inks", 3),
+                         "owl, low poly {like} this, 3 inks")        # only {colors} is filled in
+
+    def args(self, **kw):
+        return types.SimpleNamespace(**{"prompt": "an owl", "colors": None, "as_written": False, **kw})
+
+    def test_the_cli_sends_it_unless_as_written(self):
+        cfg = config.fallback_config()
+        with mock.patch.object(cli.ui, "hint") as hint:
+            self.assertEqual(cli.print_prompt(self.args(), cfg), jobs.printable("an owl", jobs.PRINT_HINT))
+            self.assertIn("--as-written", hint.call_args[0][0])
+            self.assertIn("3 flat solid colours", cli.print_prompt(self.args(colors=3), cfg))
+        with mock.patch.object(cli.ui, "hint") as hint:
+            self.assertEqual(cli.print_prompt(self.args(as_written=True), cfg), "an owl")
+            hint.assert_not_called()
+        with self.assertRaisesRegex(config.ConfigError, "--colors"):
+            cli.print_prompt(self.args(colors=0), cfg)
+
+    def test_kami_toml_replaces_it_or_turns_it_off(self):
+        cfg = config.fallback_config()
+        cfg.print_hint = ""
+        with mock.patch.object(cli.ui, "hint") as hint:
+            self.assertEqual(cli.print_prompt(self.args(), cfg), "an owl")
+            hint.assert_not_called()
+        cfg.print_hint = "{colors} inks"
+        with mock.patch.object(cli.ui, "hint"):
+            self.assertEqual(cli.print_prompt(self.args(colors=2), cfg), "an owl, 2 inks")
+        self.assertEqual(config.DEFAULT_KEYS["print_hint"], config.TEXT)
+        self.assertEqual(cli.WebBackend(cfg).print_hint, "{colors} inks")
+        self.assertEqual(cli.WebBackend(config.fallback_config()).print_hint, jobs.PRINT_HINT)
+
+    def test_the_pages_prompts_get_it_and_keep_their_names(self):
+        hint = "flat base, {colors} colours"
+        image, = webui.build_bodies({"kind": "image", "prompt": "an owl"}, hint)
+        self.assertEqual(image[0], "Image: an owl")
+        self.assertEqual((image[1]["prompt"], image[1]["name"]), ("an owl, flat base, 4 colours", "an-owl"))
+        views, = webui.build_bodies({"kind": "views", "prompt": "an owl", "colors": 2}, hint)
+        self.assertEqual(views[1]["prompt"], "an owl, flat base, 2 colours")
+        t2m, = webui.build_bodies({"kind": "text-to-mesh", "prompt": "an owl", "print_hint": False}, hint)
+        self.assertEqual(t2m[1]["prompt"], "an owl")
+        self.assertEqual(webui.build_bodies({"kind": "image", "prompt": "an owl"})[0][1]["prompt"], "an owl")
+        for colors in (0, 17, "4", True):
+            with self.assertRaisesRegex(ValueError, "colors"):
+                webui.build_bodies({"kind": "image", "prompt": "an owl", "colors": colors}, hint)
+

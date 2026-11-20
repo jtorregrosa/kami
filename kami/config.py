@@ -46,6 +46,10 @@ cloud = "SECURE"
 port = 8000
 # Where `kami mesh` / `kami image` save what they make (relative to the current directory).
 output_dir = "kami-out"
+# Prompts get a hint added so the picture is of something to print: standing on a flat
+# base, one thick piece, {colors} flat colours, matte, evenly lit. Write your own here
+# ({colors} becomes the number of filaments), or "" for prompts exactly as written.
+# print_hint = "..."
 # The pod deletes itself after max_hours of uptime, or after idle_minutes without
 # jobs, even if your PC is off. 0 disables each one.
 max_hours = 4
@@ -254,6 +258,9 @@ class Config:
     profiles: dict[str, Profile]
     # Where pods run: "runpod" or "vast" (vast.ai).
     provider: str = "runpod"
+    # Added to every prompt so the picture is of something printable (jobs.PRINT_HINT
+    # when None; "" for none).
+    print_hint: str | None = None
 
     def profile(self, name: str | None) -> Profile:
         name = name or self.default_profile
@@ -285,7 +292,7 @@ VERSION = "a version like \"12.4\""
 DEFAULT_KEYS = {
     "profile": TEXT, "provider": TEXT, "container": TEXT, "storage": TEXT, "datacenter": TEXT,
     "volume_name": TEXT, "volume_size_gb": INT, "cloud": TEXT, "port": INT,
-    "output_dir": TEXT, "max_hours": NUMBER, "idle_minutes": NUMBER,
+    "output_dir": TEXT, "max_hours": NUMBER, "idle_minutes": NUMBER, "print_hint": TEXT,
 }
 
 PROFILE_KEYS = {
@@ -493,6 +500,7 @@ def load_config(path: Path | None = None) -> Config:
         default_profile=default_profile,
         profiles=profiles,
         provider=provider,
+        print_hint=d.get("print_hint"),
     )
 
 

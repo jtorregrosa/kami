@@ -1550,6 +1550,28 @@ def mesh_params(args) -> dict:
     return params
 
 
+def print_prompt(args, cfg: Config) -> str:
+    """The prompt as it is sent: with the printing hint, unless --as-written."""
+    if getattr(args, "as_written", False):
+        return args.prompt
+    colors = getattr(args, "colors", None)
+    if colors is not None and not 1 <= colors <= jobs.MAX_PRINT_COLORS:
+        raise ConfigError(f"--colors goes from 1 to {jobs.MAX_PRINT_COLORS}")
+    hint = jobs.PRINT_HINT if cfg.print_hint is None else cfg.print_hint
+    sent = jobs.printable(args.prompt, hint, colors)
+    if sent != args.prompt:
+        ui.hint("Prompt sent with the printing hint (flat base, one piece, "
+                f"{colors or jobs.PRINT_COLORS} flat colours, matte): `--as-written` sends it bare")
+    return sent
+
+
+def add_print_options(p) -> None:
+    p.add_argument("--colors", type=int, metavar="N",
+                   help=f"filament colours the printing hint asks for (default: {jobs.PRINT_COLORS})")
+    p.add_argument("--as-written", action="store_true",
+                   help="send the prompt as written, without the printing hint")
+
+
 def image_params(args) -> dict:
     params = {}
     for key in ("steps", "guidance", "width", "height", "seed", "negative"):
@@ -1598,7 +1620,7 @@ def cmd_mesh(args, cfg: Config) -> None:
         if not served.get("image_model"):
             raise ConfigError(f"--prompt needs an image model too; profile {state.get('profile')} "
                               "has none\nUse a profile with both (e.g. `studio`), or give an image.")
-        body = {"kind": "text-to-mesh", "prompt": args.prompt,
+        body = {"kind": "text-to-mesh", "prompt": print_prompt(args, cfg),
                 "name": jobs.safe_name(args.prompt),
                 "params": {"image": image_params(args), "mesh": mesh_params(args)}}
         run_job(cfg, state, body, "Prompt -> image -> mesh", out)
@@ -1620,12 +1642,13 @@ def cmd_image(args, cfg: Config) -> None:
                           "`kami down`, then `kami up -p <a profile with image_model>`.")
     out = output_dir(args, cfg)
     base_seed = args.seed
+    prompt = print_prompt(args, cfg)
     for i in range(args.count):
         params = image_params(args)
         if base_seed is not None:
             params["seed"] = base_seed + i
         label = f"Image {i + 1}/{args.count}" if args.count > 1 else "Image"
-        run_job(cfg, state, {"kind": "image", "prompt": args.prompt,
+        run_job(cfg, state, {"kind": "image", "prompt": prompt,
                              "name": jobs.safe_name(args.prompt), "params": params}, label, out)
     ui.hint("`kami ui` shows the results in your browser")
 
@@ -1674,7 +1697,7 @@ def cmd_views(args, cfg: Config) -> None:
     if front:
         body["image"] = front
     else:
-        body["prompt"] = args.prompt
+        body["prompt"] = print_prompt(args, cfg)
     label = f"Views ({', '.join(['front', *[a for a in angles if a != 'front']])})"
     saved = run_job(cfg, state, body, label, output_dir(args, cfg))
     command = mesh_command(saved)
@@ -1795,6 +1818,75 @@ def cmd_jobs(args, cfg: Config) -> None:
             return
 
 
+def print_lines(done) -> tuple[list[str], list[str]]:
+    """(report lines, warnings) for a `printing.Printed`."""
+    x, y, z = done.size
+    solid = done.solid
+    removed = [f"{n} {word}{'s' if n != 1 else ''}" for n, word in
+               ((solid.cavities, "inner shell"), (solid.fragments, "sliver")) if n]
+    state = ui.green("closed") if solid.closed else ui.yellow("not closed")
+    if solid.rebuilt:
+        state += f" {ui.dim('·')} rebuilt, detail under {solid.detail:.2f} mm lost"
+    lines = [ui.field("size", f"{x:.1f} x {y:.1f} x {z:.1f} mm {ui.dim('·')} "
+                              f"{done.triangles:,} triangles"),
+             ui.field("solid", state + (f" {ui.dim('· ' + ', '.join(removed) + ' removed')}"
+                                        if removed else "")),
+             ui.field("base", f"{done.base_area:,.0f} mm² flat on the plate")]
+    lines += [ui.field(f"slot {i}", f"{color}  {ui.dim(f'{share:.0%} of the surface')}")
+              for i, (color, share) in enumerate(done.colors, 1)]
+    from . import printing
+    return lines, printing.warnings(done)
+
+
+def cmd_print(args, cfg: Config | None) -> int:
+    """GLB -> 3MF for a multicolour printer: a closed solid in mm on a flat base, its
+    texture reduced to a few filament colours. Runs on this PC; no pod, nothing billed."""
+    from . import printing                    # numpy and Pillow: only this command needs them
+    printing.require()
+    palette = printing.parse_palette(args.palette) if args.palette else None
+    sources = [Path(m) for m in args.mesh]
+    for source in sources:
+        if not source.is_file():
+            raise ConfigError(f"No such file: {source}")
+    out = Path(args.output) if args.output else None
+    if out and len(sources) > 1 and not out.is_dir():
+        raise ConfigError(f"With several meshes, --output is a folder that exists: {out}")
+    failed = 0
+    for n, source in enumerate(sources):
+        if n:
+            print()
+        if out is None:
+            target = jobs.free_path(source.with_suffix(".3mf"))
+        elif out.is_dir():
+            target = jobs.free_path(out / f"{source.stem}.3mf")
+        else:
+            target = out
+        ui.step(f"{source.name} {ui.dim('-> 3MF')}")
+        try:
+            done = printing.convert(source, target, height=args.height, base=args.base,
+                                    colors=args.colors, palette=palette, smoothing=args.smooth,
+                                    min_patch=args.min_patch, keep_cavities=args.keep_cavities,
+                                    up=args.up, rebuilding=args.rebuild, detail=args.detail)
+        except printing.PrintError as e:
+            if len(sources) == 1:
+                raise
+            ui.error(str(e))
+            failed += 1
+            continue
+        lines, warnings = print_lines(done)
+        ui.ok(ui.bold(str(done.path)))
+        for line in lines:
+            print(f"    {line}")
+        for text in warnings:
+            ui.warn(text)
+    if failed < len(sources):
+        ui.hint("Open it in Bambu Studio or OrcaSlicer: each slot is a filament, painted on the model.")
+        ui.hint("Give the filaments these colours, or your closest ones.")
+        if not palette:
+            ui.hint("`--colors N` for more or fewer; `--palette \"#hex,#hex\"` for the filaments you have.")
+    return 1 if failed else 0
+
+
 class WebBackend:
     """What `kami ui`'s page needs from kami: the pod's state, where to send jobs, and
     deleting the pod. The pod's API key stays here; the page never sees it."""
@@ -1802,6 +1894,8 @@ class WebBackend:
     def __init__(self, cfg: Config):
         self.cfg = cfg
         self.served: dict[str, dict] = {}       # pod id -> what it serves (/v1/info)
+        # what the page's prompts get added (the page can ask for none, or other colours)
+        self.print_hint = jobs.PRINT_HINT if cfg.print_hint is None else cfg.print_hint
 
     def status(self) -> dict:
         state = load_state()
@@ -1817,7 +1911,10 @@ class WebBackend:
             served = self.served.get(pod["id"])
         if pod:
             pod = {k: v for k, v in pod.items() if k != "url"}
-        return {"pod": pod, "ready": info["ready"], "waiting": info["waiting"],
+        profiles = [{"name": name, "concept": bool(p.image_model or p.views_model),
+                     "views": bool(p.views_model), "mesh": bool(p.mesh_model)}
+                    for name, p in self.cfg.profiles.items()]
+        return {"pod": pod, "ready": info["ready"], "waiting": info["waiting"], "profiles": profiles,
                 "served": served and {k: served.get(k) for k in
                                       ("mesh_model", "image_model", "mesh_defaults", "image_defaults",
                                        "mesh_backend", "max_views", "view_names", "multiview_modes",
@@ -1851,11 +1948,11 @@ def cmd_ui(args, cfg: Config) -> None:
         if args.folder:
             raise ConfigError(f"Not a folder: {folder}")
         folder.mkdir(parents=True, exist_ok=True)        # empty gallery; fills as results come
-    found = webui.cards(folder)
-    meshes = sum(c["kind"] == "mesh" for c in found)
+    found = webui.objects(folder)
+    meshes = sum(bool(o["meshes"]) for o in found)
 
     def ready(url):
-        ui.ok(f"kami ui · {folder} · {meshes} mesh(es), {len(found) - meshes} image(s)")
+        ui.ok(f"kami ui · {folder} · {len(found)} object(s), {meshes} with a mesh")
         ui.step(f"{ui.bold(url)} {ui.dim('(only this PC can open it)')}")
         ui.hint("It sends jobs to the pod `kami up` started; it never starts one itself.")
         ui.hint("Ctrl+C stops the page (the pod, if any, keeps running: `kami down`).")
@@ -1888,6 +1985,9 @@ BILLING_HINT = ("up", "watchdog", "mesh", "image")
 # Commands that load (or create) the config themselves, to report problems with it.
 OWN_CONFIG = ("init", "doctor")
 
+# Commands that work on local files alone: no kami.toml, no API key, no pod.
+NO_CONFIG = ("print",)
+
 
 # Commands that must work even with a broken kami.toml: a typo must never keep you
 # from seeing or deleting a pod that bills. They fall back to the default settings.
@@ -1895,7 +1995,7 @@ LENIENT = ("down", "status", "logs")
 
 
 def command_config(command: str) -> Config | None:
-    if command in OWN_CONFIG:
+    if command in OWN_CONFIG or command in NO_CONFIG:
         return None
     try:
         return load_config()
@@ -2063,6 +2163,7 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--width", type=int, help=argparse.SUPPRESS)
     p.add_argument("--height", type=int, help=argparse.SUPPRESS)
     p.add_argument("--negative", help=argparse.SUPPRESS)
+    add_print_options(p)
     add_pod_options(p)
     p.set_defaults(func=cmd_mesh)
 
@@ -2076,6 +2177,7 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--width", type=int, help="width in pixels (default 1024)")
     p.add_argument("--height", type=int, help="height in pixels (default 1024)")
     p.add_argument("--negative", help="negative prompt (models with guidance only)")
+    add_print_options(p)
     add_pod_options(p)
     p.set_defaults(func=cmd_image)
 
@@ -2092,6 +2194,7 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--lora-scale", type=float, help="weight of the camera LoRA (default 0.9)")
     p.add_argument("--elevation", help='camera height in the LoRA\'s words (default "eye-level shot")')
     p.add_argument("--distance", help='camera distance in the LoRA\'s words (default "medium shot")')
+    add_print_options(p)
     add_pod_options(p)
     p.set_defaults(func=cmd_views)
 
@@ -2105,6 +2208,37 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("-w", "--watch", action="store_true", help=f"refresh every {JOBS_WATCH_EVERY} s")
     p.add_argument("--json", action="store_true", help="the raw listing, as JSON")
     p.set_defaults(func=cmd_jobs)
+
+    p = sub.add_parser("print", help="mesh (GLB) -> 3MF to print in colours: closed, flat base, "
+                                     "in mm, a few filaments (on this PC, no pod)",
+                       epilog="e.g. `kami print owl.glb --height 60 --colors 2`, "
+                              "`kami print owl.glb --palette \"#1a4fa0,#ffffff,#202020\"`")
+    p.add_argument("mesh", nargs="+", help="GLB file(s), as `kami mesh` saves them")
+    p.add_argument("--height", type=float, default=80.0, metavar="MM",
+                   help="how tall the print is, in mm (default: 80)")
+    p.add_argument("--base", type=float, default=2.0, metavar="PCT",
+                   help="percent of the height pressed flat at the bottom, so it stands "
+                        "(default: 2; 0 leaves the bottom as it is)")
+    p.add_argument("--colors", type=int, default=4, metavar="N",
+                   help="filament colours to reduce the texture to (default: 4, one AMS)")
+    p.add_argument("--palette", metavar="HEX,HEX", help="the filament colours you have, in slot "
+                   "order: each triangle gets the closest one (instead of --colors)")
+    p.add_argument("--smooth", type=int, default=3, metavar="N",
+                   help="passes that clean colour borders and specks (default: 3; 0 for none)")
+    p.add_argument("--min-patch", type=float, default=1.0, metavar="MM2",
+                   help="colour patches under this area join their surroundings (default: 1 mm²)")
+    p.add_argument("--rebuild", choices=("auto", "always", "never"), default="auto",
+                   help="draw a new closed surface around what the mesh encloses: auto (default) "
+                        "only when cleaning it does not leave a closed solid")
+    p.add_argument("--detail", type=float, default=0.3, metavar="MM",
+                   help="the grid a rebuilt surface is drawn on; finer detail is lost (default: 0.3)")
+    p.add_argument("--keep-cavities", action="store_true",
+                   help="keep the surfaces inside the model (they print as hollows)")
+    p.add_argument("--up", choices=("y", "z"), default="y",
+                   help="the mesh's up axis (default: y, as in every GLB)")
+    p.add_argument("-o", "--output", metavar="PATH",
+                   help="the 3MF to write, or a folder (default: next to the mesh, never overwriting)")
+    p.set_defaults(func=cmd_print)
 
     p = sub.add_parser("ui", help="web page on this PC: make meshes and images, browse the results",
                        epilog="e.g. `kami ui`, `kami ui meshes --port 8765`")

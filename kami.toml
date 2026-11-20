@@ -26,6 +26,10 @@ cloud = "SECURE"
 port = 8000
 # Where `kami mesh` / `kami image` save what they make (relative to the current directory).
 output_dir = "kami-out"
+# Prompts get a hint added so the picture is of something to print: standing on a flat
+# base, one thick piece, {colors} flat colours, matte, evenly lit. Write your own here
+# ({colors} becomes the number of filaments), or "" for prompts exactly as written.
+# print_hint = "..."
 # The pod deletes itself after max_hours of uptime, or after idle_minutes without jobs,
 # even if your PC is off. 0 disables each. Override with `kami up --max-hours / --idle`.
 max_hours = 4

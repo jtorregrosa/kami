@@ -23,7 +23,7 @@ Your PC ── kami mesh photo.png ──HTTPS──► https://<pod>-8000.proxy
 
 - `kami/cli.py` — argparse CLI and the commands (`init`, `doctor`, `gpus`, `prices`,
   `profiles`, `volume`, `up`, `down`, `status`, `cost`, `logs`, `watchdog`, `mesh`, `image`,
-  `views`, `jobs`, `reload`, `ui`).
+  `views`, `jobs`, `reload`, `print`, `ui`).
 - `kami/server.py` — runs *inside the pod* (its source is sent in `KAMI_SERVER_SRC` and
   run with `python3 -c`): loads the pipelines, serves `/health`, `/metrics`, `/v1/info`
   and the jobs API (`POST /v1/jobs`, `GET /v1/jobs` (all, with stage and progress),
@@ -46,7 +46,22 @@ Your PC ── kami mesh photo.png ──HTTPS──► https://<pod>-8000.proxy
   Stdlib HTTP; torch / trellis2 / diffusers are imported lazily, so the tests import it
   without them. kami never imports it at runtime.
 - `kami/jobs.py` — client side of the jobs API: submit, poll with a progress line, download
-  (never overwriting).
+  (never overwriting). `PRINT_HINT` / `printable`: the hint every prompt gets on the
+  client (CLI `print_prompt`, page `webui._sent`) so the picture is printable: flat base,
+  one piece, `{colors}` flat colours, matte. On by default; `--as-written`, `print_hint`
+  in kami.toml. File names and labels keep the prompt as written.
+- `kami/printing.py` — `kami print`, all on the PC: GLB -> 3MF for a multicolour printer.
+  `load_glb` (own parser; one colour per triangle from the base colour texture), `solid`
+  (weld, drop inner shells and slivers; reports open / non-manifold edges, fills nothing),
+  `place` (Z up, base pressed flat, mm), `rebuild` (only when the cleaned mesh is not
+  closed or is a hollow skin: voxel grid, flood from outside, signed distance to the
+  outward-facing triangles, marching cubes, colours from the nearest old triangle; the
+  method of `../jointwright`'s `packages/core/src/import/solidify.ts`, without its
+  winding vote and its simplify), `quantize` / `nearest` (k-means in Oklab with lightness
+  at half weight; or a fixed palette), `smooth` / `absorb`, `write_3mf` (`paint_color` for
+  Bambu Studio / OrcaSlicer plus standard `basematerials`). The one module with
+  third-party imports (numpy, Pillow; scipy and scikit-image inside `rebuild`), and only
+  `cmd_print` imports it.
 - `kami/pod.py` — pod plumbing: provider client, `server_spec` (env + guard-wrapped
   entrypoint + image), `pod_body` / `vast_body`, endpoint URL, health, log streams,
   termination, `/metrics` reading (`server_usage`).
@@ -59,11 +74,19 @@ Your PC ── kami mesh photo.png ──HTTPS──► https://<pod>-8000.proxy
   `extends`; `mesh_model` / `image_model`), `.env`, local state in `.kami/`.
 - `kami/api.py`, `kami/runpod.py`, `kami/vast.py`, `kami/catalog.py` — provider clients and
   GPU name tables (unchanged from ronin).
-- `kami/webui.py` + `kami/webui.html` — `kami ui`: a page on 127.0.0.1 to send jobs to the
-  active pod (kami relays them; the pod key stays in kami), follow them, browse
-  `output_dir` (GLBs in `<model-viewer>` from a CDN) and delete the pod. It never starts a
-  pod. Host header checked; POSTs need the page's token, JSON and same Origin.
-  `cli.WebBackend` gives it the pod status, target and `down`.
+- `kami/webui.py` + `kami/webui.html` — `kami ui`: a page on 127.0.0.1 in three stages,
+  Concept (text or a front picture -> views; image and views jobs), Mesh (views in named
+  slots -> GLB) and Print (`printing` on this PC, painted preview), opening on the stage
+  the pod's `/v1/info` says it serves. kami relays the jobs (the pod key stays in kami);
+  the page never starts a pod, and a stage the pod lacks shows the `kami up -p` for it
+  (`WebBackend.status()["profiles"]`). `objects()` is the library: `output_dir` and one
+  folder deep, grouped by name (`VIEW_OF`: owl-left-2.png is the newest left view of
+  "owl"); `resolve()` is the only way a name becomes a file. Pictures of a job may be
+  uploads or `{file}` from the library. `Printer`: POST /api/print (`prepare` cached, so
+  colours answer at once; `save` writes the 3MF), /preview/<id>.glb, /thumbs/<mesh> (a
+  drawn PNG for meshes with no picture). The page builds its DOM from JSON with
+  `textContent`, never HTML from file names. Host header checked; POSTs need the page's
+  token, JSON and same Origin. `cli.WebBackend` gives it the pod status, target, `down`.
 - `kami/watchdog.py`, `kami/ui.py`, `kami/mascot.py` — local guard, console output, mascot.
 - `docker/Dockerfile.pixal3d` — Pixal3D + NAF (pinned) + natten 0.17.5 wheel on top of the base.
 - `docker/Dockerfile` — the kami-server image (torch 2.6 / CUDA 12.4 + TRELLIS.2 + diffusers);
@@ -74,7 +97,10 @@ Your PC ── kami mesh photo.png ──HTTPS──► https://<pod>-8000.proxy
 
 ## Conventions
 
-- Standard library only on the client; no third-party runtime dependencies.
+- Standard library only for the pod commands, so they run anywhere. `kami print`
+  (`kami/printing.py`) is the exception and may take dependencies (the `print` extra:
+  numpy, Pillow, scipy, scikit-image), imported only by that command; its tests are in
+  `tests/test_printing.py`, skipped without them.
 - `server.py` and `guard.py` change without an image rebuild. Only dependencies belong in
   the Dockerfile.
 - All console output goes through `kami/ui.py`. Respect `NO_COLOR`, non-TTY output and
@@ -106,6 +132,31 @@ and its pipelines load on a 4090, with `dinov2_v4_checkpoints` and
 libOpenGL.so.0, now in the image: shape clean-up and Hunyuan3D-Paint never ran), and the guard deleting the pod through GraphQL (the pod-scoped key got 403
 from api.runpod.io/v2 and rest.runpod.io did not resolve: the old guard never deleted it).
 Check them on the next pod (`kami up --keep-on-failure`, `kami logs`).
+
+`kami print`: the owl's Pixal3D GLB (a double shell: an outer closed surface and the same
+one inside, facing inwards, joined by 6 edges) becomes a closed solid of 251k triangles in
+~2.5 s; Bambu Studio 2.9.1's command line loads the 3MF with nothing to repair and keeps
+the paint (checked by exporting it back). Not checked: the file opened in Bambu Studio's
+window (whether it offers to map the standard 3MF colours, and that paint wins if both
+are there), a sliced or printed model, OrcaSlicer. TRELLIS.2 meshes (duck.glb) are left
+with ~100 non-manifold edges after cleaning, so they are rebuilt: closed, 630k triangles
+at 0.3 mm, ~9 s, and Bambu Studio's command line loads that too with nothing to repair.
+Not met yet: a skin with an opening wider than a cube (it should come out reported as a
+hollow skin; only built by hand in a test). The model's front does not always face the
+plate's front (Pixal3D and TRELLIS.2 differ): turn it in the slicer.
+
+The redesigned `kami ui` was looked at in a browser with no pod (Print: the owl painted,
+2 colours, "My filaments") and with pretend pods (a backend returning a fixed status):
+Concept on a views-qwen-like pod, Mesh on a pixal3d-like pod with a library object's four
+views filling the slots, the library with drawn thumbnails, a phone-width layout. Never
+with a real pod: no job has been sent from the new page, so "Make views", "Try fronts",
+"Redo" of one view, "Make mesh" from library pictures and a finished job landing on the
+stage are untested end to end (their request bodies are unit-tested).
+
+The printing hint (`jobs.PRINT_HINT`) has never been sent to a pod: whether Z-Image-Turbo
+and Qwen follow it (flat colours, base), and whether `kami print` then gives cleaner
+colours than the glossy owl, is to be compared on the next `views-qwen` pod, same concept
+and seed, with and without `--as-written`.
 
 ## Working notes
 
