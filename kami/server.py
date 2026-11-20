@@ -117,7 +117,10 @@ PIXAL_AZIMUTHS = {"front": 0, "front-left": 45, "left": 90, "back-left": 135, "b
 PIXAL_VIEW_ORDER = ("front", "left", "back", "right", "front-left", "back-left",
                     "back-right", "front-right")
 PIXAL_FOV = 0.3490658503988659            # radians: transforms.json of its example
-PIXAL_LOW_VRAM_BELOW_GIB = 40             # GPUs smaller than this run its low-VRAM mode
+# GPUs smaller than this run Pixal3D's low-VRAM mode (models on the CPU, a stage at a
+# time, 1024). It was 40 until four posed views at 1536 ran out of memory on an L40S too
+# (45 GiB, 40.6 of them allocated): only the 80 GB cards are known to hold it.
+PIXAL_LOW_VRAM_BELOW_GIB = 60
 PIXAL_DISTANCE = 3.1192049980163574
 PIXAL3D_CODE = "/opt/Pixal3D"             # the -pixal3d image's clone, at a pinned commit
 NAF_CODE = "/opt/NAF"                     # its feature upsampler, pinned, weights included

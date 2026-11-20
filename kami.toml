@@ -114,13 +114,15 @@ disk_gb = 60           # ~34 GB of weights
 # TRELLIS.2 keeps its ~16 GB of models in RAM between steps: a 4090 host with 29 GB ran
 # out of memory while making a mesh, hence min_ram_gb.
 #
-# [profiles.trellis]
-# mesh_model = "microsoft/TRELLIS.2-4B"
-# gpus = ["RTX 4090", "L40S", "RTX A6000", "L40", "A100 PCIe 80GB"]
-# min_vram_gb = 24
-# min_ram_gb = 48
-# disk_gb = 60
-# mesh_defaults = { texture_size = 2048, decimation_target = 500000, remesh = true }
+# (On again since 2026-11-20: its several-views trick takes the pictures as they come,
+# with no camera assumed for each, which pictures drawn by hand or by Gemini need.)
+[profiles.trellis]
+mesh_model = "microsoft/TRELLIS.2-4B"
+gpus = ["RTX 4090", "L40S", "RTX A6000", "L40", "A100 PCIe 80GB"]
+min_vram_gb = 24
+min_ram_gb = 48
+disk_gb = 60
+mesh_defaults = { texture_size = 2048, decimation_target = 500000, remesh = true }
 
 # image: text -> image alone with Z-Image-Turbo: 8 steps, no guidance, a 24 GB card.
 # Cheaper than `views` to try many fronts, but it cannot turn the camera.

@@ -212,6 +212,20 @@ come from `fronts-flux`. Not done: views or a mesh from a FLUX.2 front; lowpoly,
 relief and natural on any model. The presets' negative prompts are read only by a model
 with guidance (the full Z-Image); FLUX.2 and Turbo ignore them.
 
+Meshes from pictures drawn elsewhere (2026-11-20; Gemini made a cartoon gecko and a
+caterpillar, front, left, back and right; `kami-out/gemini/mesh-comparison.png`):
+Pixal3D places each named view at a fixed camera (object height, 90 degrees apart), and
+views that are not there make it double things: a gecko whose front and back were drawn
+from above came out with repeated features and a straightened tail; with those two
+retaken at ground level it was cleaner, the tail still straight. From one picture
+(three-quarter front) Pixal3D was clean. TRELLIS.2 with `--views` assumes no camera and
+gave the best gecko and caterpillar from the same four pictures (stochastic a little
+better than multidiffusion): the first run of TRELLIS.2 multiview on a GPU. So: views
+from `kami views` (Qwen, posed) -> Pixal3D; pictures from anywhere -> the `trellis`
+profile, or one picture. Pixal3D at 1536 with four views ran out of memory on an L40S
+(45 GiB), hence `PIXAL_LOW_VRAM_BELOW_GIB = 60`. `kami up -p mesh` took 7 to 16 minutes.
+Every mesh's texture looked duller than its pictures; not looked into.
+
 ## Working notes
 
 - The user often writes in Spanish; reply in the language they use.
