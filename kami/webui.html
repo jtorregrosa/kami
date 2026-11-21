@@ -59,7 +59,8 @@ header .wrap { display: flex; gap: 14px; align-items: center; min-height: 56px; 
 .stagetab b { font-size: 16px; }
 .stagetab span { font-size: 13px; color: var(--dim); }
 .stagetab[aria-selected="true"] { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
-.stagetab.here span { color: var(--ok); }
+.stagetab.here span::before { content: "\25CF  "; color: var(--accent); font-size: 10px; vertical-align: 1px; }
+.stagetab .tick { color: var(--ok); font-style: normal; font-weight: 700; margin-left: 6px; }
 
 .work { display: grid; grid-template-columns: minmax(0, 360px) minmax(0, 1fr); gap: 14px; align-items: start; }
 .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px; }
@@ -224,6 +225,7 @@ section.block { margin: 22px 0; }
   .wrap { padding: 0 14px; }
   .work { grid-template-columns: minmax(0, 1fr); }
   .stagetab span { display: none; }
+  .stagetab .tick { margin-left: 2px; }
 }
 </style>
 </head>
@@ -293,6 +295,14 @@ function baseHint() {
   const found = presets.find(x => x.name === chosenPreset());
   return found ? found.text : hintText;
 }
+// Whether this pod's image model heeds a negative prompt. Pods that say so are believed;
+// older ones are judged by their defaults (no guidance, or FLUX.2: it does not).
+function readsNegative() {
+  const s = served();
+  if (typeof s.image_negative === "boolean") return s.image_negative;
+  const g = (s.image_defaults || {}).guidance;
+  return !!s.image_model && !/flux|turbo/i.test(s.image_model) && (g == null || g > 1);
+}
 function baseNegative() {
   const found = presets.find(x => x.name === chosenPreset());
   return (found && found.negative) || "";
@@ -307,7 +317,7 @@ let current = null;          // key of the object on the stage
 let meshMode = "views";      // views | each | text
 const slots = {};            // view -> {file} (library) or {name, data, url} (uploaded)
 const loose = [];            // pictures for "one mesh per picture"
-const PRINT_DEFAULTS = {height: 80, base: 2, mode: "auto", colors: 4, palette: [], rebuild: "auto", detail: 0.3,
+const PRINT_DEFAULTS = {height: 80, fit: "longest", base: 2, mode: "auto", colors: 4, palette: [], rebuild: "auto", detail: 0.3,
                         smoothing: 3, minPatch: 1, keep: false};
 const print = Object.assign({}, PRINT_DEFAULTS, store.get("print", {}),
                             {result: null, busy: false, dirty: false, error: "", forFile: null});
@@ -454,13 +464,27 @@ function setStage(name, byUser) {
   if (name === "print") queuePrint();
   render();
 }
+// What the object on the stage already has, stage by stage: green ticks are for that alone.
+function doneFor(o, name) {
+  if (!o) return false;
+  if (name === "concept") return !!frontOf(o);
+  if (name === "views") return Object.keys(o.views).filter(v => v !== "front").length > 0;
+  if (name === "mesh") return !!meshOf(o);
+  return o.prints.length > 0;
+}
 function renderStages() {
+  const o = obj();
   for (const tab of $$(".stagetab")) {
-    const name = tab.dataset.stage, here = can(name);
+    const name = tab.dataset.stage, here = can(name), done = doneFor(o, name);
     tab.setAttribute("aria-selected", String(name === stage));
     tab.classList.toggle("here", here);
     $("span", tab).textContent = name === "print" ? "on this PC, no pod"
-      : here ? "this pod" : ready() ? "another pod" : "needs a pod";
+      : here ? "on this pod" : ready() ? "needs another pod" : "needs a pod";
+    let tick = $(".tick", tab);
+    if (done && !tick) $("b", tab).append(tick = el("i", {class: "tick", "aria-hidden": "true", text: "\u2713"}));
+    if (!done && tick) tick.remove();
+    tab.title = done ? "Done for " + o.name : "";
+    tab.setAttribute("aria-label", tab.dataset.stage[0].toUpperCase() + tab.dataset.stage.slice(1) + ", " + $("span", tab).textContent + (done ? ", done for this object" : ""));
   }
 }
 $$(".stagetab").forEach(t => t.addEventListener("click", () => setStage(t.dataset.stage, true)));
@@ -638,12 +662,13 @@ const HELP = {
   imageSteps: "Denoising steps of the picture. Z-Image-Turbo is made for 8.",
   imageGuidance: "Turbo models run at 0. Above 0 the model follows the prompt more closely and reads the negative prompt.",
   imageSize: "In pixels, multiples of 64. The mesh models expect a square picture.",
-  negative: "What to keep out of the picture: each kind of print brings its own list. Read by models running with guidance above 0 (Z-Image); Z-Image-Turbo ignores it.",
+  negative: "What to keep out of the picture: each kind of print brings its own list. Only models running with guidance read it (the full Z-Image); Z-Image-Turbo and FLUX.2 ignore it, and then it is not sent.",
   texture: "The side of the mesh's texture, in pixels. Larger is sharper, and a bigger file.",
   faces: "Triangles kept when the mesh is simplified. More keeps finer detail, and a bigger file.",
   multiview: "How TRELLIS.2 uses several views. Multidiffusion: every view has its say at every step, which keeps small painted details sharp. Stochastic: one view per step, brighter but blurrier where the views disagree.",
   remesh: "Rebuilds the model's raw surface into a cleaner one. Off keeps its own triangles.",
-  height: "How tall the print is. The other two sizes follow.",
+  height: "How big the print is, in millimetres, on the side chosen next to it. The other sides follow.",
+  fit: "The longest side suits anything; the height, a standing figure that must be so tall. A creature lying down is long and low: 80 mm tall, a gecko came out 30 cm long.",
   base: "The lowest part of the model, as a share of its height, is pressed flat so it stands on the plate. 0 leaves it as it is.",
   filaments: "The texture is reduced to this many colours, the most used in slot 1. Fewer print faster and waste less in purges.",
   rebuild: "Draws a new closed surface around everything the mesh encloses. Auto does it only when the mesh is open or a hollow skin.",
@@ -681,6 +706,12 @@ function extras(form, front) {
                                  el("small", {class: "help", hidden: true, text: HELP.preset})),
        field("Colours", number("hint_colors", "", {min: "1", max: "16", value: String(concept.colors || hintColors)}))),
     about, caution);
+  // the presets name no number of colours (counted, they came out as blocks): the field is
+  // there only for a printing text of your own that says {colors}
+  const counted = () => {
+    const box = form.elements.hint_colors.closest("label");
+    box.hidden = !/\{colors\}/.test(printing.value) || !form.elements.for_print.checked;
+  };
   form.append(line);
   printing.value = concept.hint === undefined ? baseHint() : concept.hint;
   const section = group("The prompt", "what kami adds to your description",
@@ -695,11 +726,12 @@ function extras(form, front) {
     draft = form.elements.prompt.value;
     const out = $(".sent", form);
     if (out) out.textContent = sentPrompt(form);
+    counted();
     const taken = [...new Set((draft.match(/\b(no|not|without|never|none|sin|ningun[ao]?)\b/gi) || []))];
     caution.hidden = !taken.length;
     caution.textContent = taken.length ? "\u201c" + taken.join(", ") + "\u201d: a prompt draws what it names, also after "
-      + "\u201cno\u201d or \u201cwithout\u201d. Say what you want in its place (a smooth round head), or name it under "
-      + "Settings, Negative prompt." : "";
+      + "\u201cno\u201d or \u201cwithout\u201d. Say what you want in its place (a smooth round head)"
+      + (readsNegative() ? ", or name it under Settings, Negative prompt." : ".") : "";
   };
   form.addEventListener("input", show);
   form.addEventListener("change", () => { rememberConcept(form, how ? baseFront() : front); show(); });
@@ -780,8 +812,14 @@ function conceptControls() {
         field("Width", number("i_width", idf.width ?? 1024, {step: "64", min: "256"}), HELP.imageSize),
         field("Height", number("i_height", idf.height ?? 1024, {step: "64", min: "256"}), HELP.imageSize)),
       field("Negative prompt", text("i_negative", "nothing"), HELP.negative)));
-    sections[sections.length - 1].querySelector('[name="i_negative"]').value =
-      concept.negative === undefined ? baseNegative() : concept.negative;
+    const unwanted = sections[sections.length - 1].querySelector('[name="i_negative"]');
+    unwanted.value = concept.negative === undefined ? baseNegative() : concept.negative;
+    if (!readsNegative()) {
+      // shown, so the list can be read and kept, but not sent: this model would ignore it
+      unwanted.disabled = true;
+      unwanted.closest("label").append(el("small", {class: "help", text:
+        s.image_model.split("/").pop() + " ignores a negative prompt: say what you want in the description instead."}));
+    }
   }
   sections.push(group("Repeating a result", null,
     el("div", {class: "cols"}, field("Seed", number("seed", "random"), HELP.seed))));
@@ -809,7 +847,8 @@ function conceptControls() {
     const typed = prompt.value.trim(), seed = num(form, "seed");
     if (!typed) return fail(form, "Describe the object first");
     const imageParams = images ? {seed, steps: num(form, "i_steps"), guidance: num(form, "i_guidance"), width: num(form, "i_width"),
-                                  height: num(form, "i_height"), negative: form.elements.i_negative.value.trim()} : {seed};
+                                  height: num(form, "i_height"),
+                                  negative: readsNegative() ? form.elements.i_negative.value.trim() : undefined} : {seed};
     if (kind === "image") {
       return send(form, Object.assign({kind: "image", prompt: typed, count: num(form, "count") || 1, params: imageParams,
                                        front_hint: form.elements.front_text.value}, hintBody(form)));
@@ -1039,9 +1078,15 @@ function meshControls() {
   });
   return form;
 }
-function viewer(src, alt) {
-  const shown = el("model-viewer", {src, alt, "camera-controls": true, "auto-rotate": true, "shadow-intensity": "1",
-                                    exposure: "1", "interaction-prompt": "none"});
+// The first look: three-quarter and from a little above. The models do not agree on which
+// way a mesh faces, and straight on, a gecko showed its back or its belly. `size` (m): frame
+// on that, not on all the scene (the print preview has a plate around the model).
+function viewer(src, alt, size) {
+  const attrs = {src, alt, "camera-controls": true, "auto-rotate": true, "shadow-intensity": "1", exposure: "1",
+                 "interaction-prompt": "none", "camera-orbit": "35deg 62deg auto", "min-camera-orbit": "auto auto 0m"};
+  if (size) Object.assign(attrs, {"camera-orbit": "35deg 62deg " + (size * 1.9).toFixed(3) + "m",
+                                  "camera-target": "0m " + (size * 0.15).toFixed(3) + "m 0m", "field-of-view": "30deg"});
+  const shown = el("model-viewer", attrs);
   // The mesh models also guess how metallic each part is (about 0.4 on a toy gecko), and a
   // viewer darkens a metal that has nothing to reflect: the mesh looked duller than its
   // pictures. What is printed is the base colour alone, so that is what is shown.
@@ -1082,7 +1127,9 @@ function printControls() {
   const form = el("form", {});
   form.append(el("h3", {text: "A 3MF to print in colours"}),
     el("div", {class: "row"},
-      field("Height (mm)", number("height", "", {min: "5", max: "400", step: "1", value: String(print.height)}), HELP.height),
+      field("Size (mm)", number("height", "", {min: "5", max: "400", step: "1", value: String(print.height)}), HELP.height),
+      field("Measured on", el("select", {name: "fit"}, [["longest", "the longest side"], ["height", "the height"]]
+        .map(([v, t]) => new Option(t, v, false, v === print.fit))), HELP.fit),
       field("Flat base (%)", number("base", "", {min: "0", max: "40", step: "0.5", value: String(print.base)}), HELP.base)));
   const auto = print.mode === "auto";
   form.append(el("div", {class: "seg", role: "group", "aria-label": "Colours"},
@@ -1133,6 +1180,7 @@ function printControls() {
   withSettings(form, dialog);
   form.addEventListener("change", () => {
     print.height = num(form, "height") || print.height;
+    print.fit = form.elements.fit.value;
     print.base = num(form, "base") ?? print.base;
     if (form.elements.colors) print.colors = num(form, "colors") || print.colors;
     print.rebuild = form.elements.rebuild.value;
@@ -1159,7 +1207,7 @@ async function runPrint(save) {
   print.error = "";
   stageKey = ""; renderStage();
   rememberPrint();
-  const body = {file: mesh.file, height: print.height, base: print.base, rebuild: print.rebuild, detail: print.detail,
+  const body = {file: mesh.file, height: print.height, fit: print.fit, base: print.base, rebuild: print.rebuild, detail: print.detail,
                 smoothing: print.smoothing, min_patch: print.minPatch, keep_cavities: print.keep, save};
   if (print.mode === "mine") body.palette = print.palette; else body.colors = print.colors;
   try {
@@ -1187,7 +1235,8 @@ function printStage(box) {
   }
   const r = print.forFile === mesh.file ? print.result : null;
   const stageBox = el("div", {class: "viewer"});
-  if (r) stageBox.append(viewer(r.preview, o.name + ", painted"));
+  // framed on the model, the plate around it: zoom out to see the whole plate
+  if (r) stageBox.append(viewer(r.preview, o.name + ", painted", Math.max(r.size[0], r.size[1], r.size[2]) / 1000));
   if (print.busy) stageBox.append(el("div", {class: "veil"}, el("span", {}, el("span", {class: "spin", style: "display:inline-block;margin-right:8px"}),
     r ? "Updating…" : "Making it a solid on the plate…")));
   else if (print.error) stageBox.append(el("div", {class: "veil"}, el("span", {class: "notice bad", text: print.error})));
@@ -1197,7 +1246,10 @@ function printStage(box) {
   const solid = r.closed ? "closed" + (r.rebuilt ? ", rebuilt" : "") : "not closed";
   box.append(el("div", {class: "metrics"},
     el("div", {class: "metric"}, el("small", {text: "Solid"}), el("b", {class: r.closed ? "ok" : "warn", text: solid})),
-    el("div", {class: "metric"}, el("small", {text: "Size (mm)"}), el("b", {text: r.size.join(" × ")})),
+    el("div", {class: "metric"}, el("small", {text: "Width × depth × height (mm)"}), el("b", {text: r.size.join(" × ")})),
+    el("div", {class: "metric"}, el("small", {text: r.plate + " mm plate"}),
+       el("b", {class: Math.max(r.size[0], r.size[1], r.size[2]) <= r.plate ? "ok" : "warn",
+                text: Math.max(r.size[0], r.size[1], r.size[2]) <= r.plate ? "fits" : "too big"})),
     el("div", {class: "metric"}, el("small", {text: "Flat base"}), el("b", {text: r.base_area.toLocaleString() + " mm²"})),
     el("div", {class: "metric"}, el("small", {text: "Triangles"}), el("b", {text: r.triangles.toLocaleString()}))));
   box.append(el("ul", {class: "slotlist"}, r.colors.map((c, i) => el("li", {},

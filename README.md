@@ -218,7 +218,9 @@ to the defaults" forgets it.
 Below, the jobs on the pod (stage and progress, the queue, also those sent from a
 terminal) and the **library**: everything in `output_dir` and the folders directly inside
 it, grouped by object, so `owl-front.png`, `owl-left.png`, `owl-front.glb` and
-`owl-front.3mf` are one card. Click one to put it on the stage.
+`owl-front.3mf` are one card. Click one to put it on the stage. A file or folder whose
+name starts with `_` or `.` is left out: a place for comparison sheets and other working
+files (`kami-out/_sheets/`).
 
 The page is served on 127.0.0.1 only, and only that page can act: other sites cannot
 send jobs or delete the pod. kami relays the jobs, so the pod's key never reaches the
@@ -268,8 +270,9 @@ turns the GLB into a 3MF for a multicolour printer. It runs on your PC: no pod, 
 billed.
 
 ```powershell
-kami print kami-out\owl.glb                              # owl.3mf next to it: 80 mm tall, 4 colours
-kami print owl.glb --height 60 --colors 2                # smaller, two filaments
+kami print kami-out\owl.glb                              # owl.3mf next to it: 80 mm long, 4 colours
+kami print owl.glb --size 60 --colors 2                  # smaller, two filaments
+kami print owl.glb --height 60                           # 60 mm tall, whatever its length
 kami print owl.glb --palette "#1a4fa0,#ffffff,#202020"   # the filaments you have, in slot order
 ```
 
@@ -295,8 +298,10 @@ What it does:
   detail finer than a cube is lost, and an opening wider than a cube still lets the
   flood in (the report then says it is a hollow skin). `--rebuild always` does it to any
   mesh, `--rebuild never` writes the mesh as cleaned and leaves the repair to the slicer.
-- **On the plate.** Z up, scaled to `--height` mm, and the lowest `--base` percent of it
-  (2 by default) pressed flat so it stands.
+- **On the plate.** Z up, scaled to `--size` mm along its longest side (80 by default), or
+  to `--height` mm tall, and the lowest `--base` percent of it (2 by default) pressed flat
+  so it stands. A creature lying down is long and low: 80 mm tall, a gecko came out 30 cm
+  long, more than a 256 mm plate.
 - **A few colours.** Every triangle takes the texture's colour under it; those are reduced
   to `--colors` (4, one AMS), the one covering most surface in slot 1. Light and dark
   count less than hue, since a texture has the light baked into it and a shadow is not
@@ -326,7 +331,7 @@ some MB.
 | `kami mesh --prompt TEXT` | Text → image → GLB (needs a profile with both models) |
 | `kami image PROMPT` | Text → PNG, with the printing hint (`-n`, `--seed`, `--steps`, `--guidance`, `--width`, `--height`, `--preset`, `--colors`, `--as-written`) |
 | `kami views CONCEPT` | Concept → front, left, back, right pictures of it, for `kami mesh` with views (`--front IMAGE`, `--angles`, `--seed`, `--steps`, `--guidance`, `--lora-scale`, `--elevation`, `--distance`, `--preset`, `--colors`, `--as-written`) |
-| `kami print MESH...` | GLB → 3MF to print in colours, on this PC: closed solid, flat base, mm, the texture as a few filaments (`--height`, `--base`, `--colors`, `--palette`, `--rebuild`, `--detail`, `--smooth`, `--min-patch`, `--keep-cavities`, `-o`) |
+| `kami print MESH...` | GLB → 3MF to print in colours, on this PC: closed solid, flat base, mm, the texture as a few filaments (`--size`, `--height`, `--base`, `--colors`, `--palette`, `--rebuild`, `--detail`, `--smooth`, `--min-patch`, `--keep-cavities`, `-o`) |
 | `kami ui [FOLDER]` | Web page on this PC: Concept → Views → Mesh → Print, opening on what the pod serves; the library by object (`--port`, `--no-browser`) |
 | `kami jobs` | The pod's jobs, whoever sent them: stage and progress of the running one, the queue, the last ones (`--watch`, `--json`) |
 | `kami reload` | Send this kami's server code to the running pod and restart the server: no new pod, no download (`--force` with jobs running) |

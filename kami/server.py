@@ -551,6 +551,22 @@ def _accepted(fn, kwargs):
     return {k: v for k, v in kwargs.items() if k in params}
 
 
+def reads_negative():
+    """Whether the image model heeds a negative prompt with its default guidance: only with
+    classifier-free guidance (Z-Image at 4; Turbo runs at 0) and a pipeline that takes one.
+    FLUX.2 [dev] is guidance-distilled: it takes no negative prompt."""
+    if not IMAGE_MODEL or "flux" in IMAGE_MODEL.lower():
+        return False
+    if float(IMAGE_DEFAULTS.get("guidance") or 0) <= 1:
+        return False
+    if PIPES.image is None:
+        return None                                   # not loaded yet: unknown
+    try:
+        return "negative_prompt" in inspect.signature(PIPES.image.__call__).parameters
+    except (TypeError, ValueError):
+        return None
+
+
 def make_image(prompt, params, out_path):
     import torch
     p = {**IMAGE_DEFAULTS, **params}
@@ -1403,6 +1419,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(200, text.encode(), "text/plain; version=0.0.4")
         if path == "/v1/info":
             return self.send(200, {"mesh_model": MESH_MODEL or None, "image_model": IMAGE_MODEL or None,
+                                   "image_negative": reads_negative(),
                                    "mesh_defaults": MESH_DEFAULTS, "image_defaults": IMAGE_DEFAULTS,
                                    "offload": OFFLOAD, "ready": PIPES.ready,
                                    "reload": True, "started_at": STARTED_AT,

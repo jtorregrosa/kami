@@ -1895,7 +1895,8 @@ def cmd_print(args, cfg: Config | None) -> int:
             target = out
         ui.step(f"{source.name} {ui.dim('-> 3MF')}")
         try:
-            done = printing.convert(source, target, height=args.height, base=args.base,
+            fit, mm = ("height", args.height) if args.height else ("longest", args.size or 80.0)
+            done = printing.convert(source, target, height=mm, fit=fit, base=args.base,
                                     colors=args.colors, palette=palette, smoothing=args.smooth,
                                     min_patch=args.min_patch, keep_cavities=args.keep_cavities,
                                     up=args.up, rebuilding=args.rebuild, detail=args.detail)
@@ -1955,7 +1956,7 @@ class WebBackend:
                                       ("mesh_model", "image_model", "mesh_defaults", "image_defaults",
                                        "mesh_backend", "max_views", "view_names", "multiview_modes",
                                        "views_model", "views_defaults", "view_angles",
-                                       "views_from_prompt")}}
+                                       "views_from_prompt", "image_negative")}}
 
     def target(self) -> tuple[str, str]:
         state = load_state()
@@ -2247,11 +2248,14 @@ def main(argv: list[str] | None = None) -> None:
 
     p = sub.add_parser("print", help="mesh (GLB) -> 3MF to print in colours: closed, flat base, "
                                      "in mm, a few filaments (on this PC, no pod)",
-                       epilog="e.g. `kami print owl.glb --height 60 --colors 2`, "
+                       epilog="e.g. `kami print owl.glb --size 60 --colors 2`, "
                               "`kami print owl.glb --palette \"#1a4fa0,#ffffff,#202020\"`")
     p.add_argument("mesh", nargs="+", help="GLB file(s), as `kami mesh` saves them")
-    p.add_argument("--height", type=float, default=80.0, metavar="MM",
-                   help="how tall the print is, in mm (default: 80)")
+    size = p.add_mutually_exclusive_group()
+    size.add_argument("--size", type=float, metavar="MM",
+                      help="the print's longest side, in mm (default: 80)")
+    size.add_argument("--height", type=float, metavar="MM",
+                      help="its height instead, in mm (a figure lying down is long and low)")
     p.add_argument("--base", type=float, default=2.0, metavar="PCT",
                    help="percent of the height pressed flat at the bottom, so it stands "
                         "(default: 2; 0 leaves the bottom as it is)")

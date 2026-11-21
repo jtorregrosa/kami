@@ -69,14 +69,17 @@ MAX_HINT = 2000                  # characters of a hint written on the page
 
 def results(folder: Path) -> list[Path]:
     """The meshes, images and 3MFs in `folder` and in the folders directly inside it
-    (where one tidies them by hand), newest first."""
+    (where one tidies them by hand), newest first. A name starting with "." or "_" is
+    left out, file or folder: where comparison sheets and other working files go."""
     if not folder.is_dir():
         return []
     files = []
     for entry in folder.iterdir():
-        inside = [entry] if entry.is_file() else (
-            list(entry.iterdir()) if entry.is_dir() and not entry.name.startswith(".") else [])
-        files += [p for p in inside if p.is_file() and p.suffix.lower() in RESULT_SUFFIXES]
+        if entry.name.startswith((".", "_")):
+            continue
+        inside = [entry] if entry.is_file() else (list(entry.iterdir()) if entry.is_dir() else [])
+        files += [p for p in inside if p.is_file() and p.suffix.lower() in RESULT_SUFFIXES
+                  and not p.name.startswith((".", "_"))]
     return sorted(files, key=lambda p: (p.stat().st_mtime, p.name), reverse=True)
 
 
@@ -173,9 +176,10 @@ class Printer:
         source = resolve(self.folder, request.get("file"))
         if source is None or source.suffix.lower() not in MESH_SUFFIXES:
             raise ValueError("Pick a mesh (.glb) from the library")
-        geometry = _params({k: request.get(k) for k in ("height", "base", "detail", "rebuild", "keep_cavities")},
+        geometry = _params({k: request.get(k) for k in ("height", "base", "detail", "rebuild", "keep_cavities", "fit")},
                            {"height": float, "base": float, "detail": float, "rebuild": str,
-                            "keep_cavities": bool})
+                            "keep_cavities": bool, "fit": str})
+        geometry.setdefault("fit", "longest")      # the page measures the longest side
         finish = _params({k: request.get(k) for k in ("smoothing", "min_patch")},
                          {"smoothing": int, "min_patch": float})
         colors = request.get("colors")
@@ -193,7 +197,7 @@ class Printer:
                     source, height=geometry.get("height", 80.0), base=geometry.get("base", 2.0),
                     detail=geometry.get("detail", printing.DETAIL),
                     rebuilding=geometry.get("rebuild", "auto"),
-                    keep_cavities=geometry.get("keep_cavities", False))
+                    keep_cavities=geometry.get("keep_cavities", False), fit=geometry["fit"])
                 self.key = key
             mesh, report = self.prepared
             labels, swatches, share = printing.paint(mesh, colors=colors or jobs.PRINT_COLORS,
@@ -204,8 +208,8 @@ class Printer:
                 printing.write_3mf(target, mesh, labels, swatches, source.stem)
                 saved = target.relative_to(self.folder).as_posix()
             done = printing.describe(None, mesh, report, swatches, share)
-            self.preview = (secrets.token_urlsafe(8), printing.preview_glb(mesh, labels, swatches))
-        return {"preview": f"preview/{self.preview[0]}.glb", "saved": saved,
+            self.preview = (secrets.token_urlsafe(8), printing.preview_glb(mesh, labels, swatches, plate=printing.PLATE_MM))
+        return {"preview": f"preview/{self.preview[0]}.glb", "saved": saved, "plate": printing.PLATE_MM,
                 "size": [round(x, 1) for x in done.size], "triangles": done.triangles,
                 "base_area": round(done.base_area), "closed": report.closed,
                 "rebuilt": report.rebuilt, "detail": round(report.detail, 2),

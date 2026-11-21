@@ -357,8 +357,10 @@ class PrintingTests(unittest.TestCase):
             name, painted = printer.preview
             self.assertEqual(shown["preview"], f"preview/{name}.glb")
             back = printing.load_glb(self.write("painted.glb", painted))       # a GLB of plain colours
-            self.assertEqual(len(back.faces), 12)
-            self.assertAlmostEqual(float(np.ptp(back.vertices[:, 1])), 0.040, places=5)   # Y up, metres
+            self.assertEqual(len(back.faces), 12 + 12)                          # the model, and the plate under it
+            self.assertAlmostEqual(float(back.vertices[:, 1].max()), 0.040, places=5)    # Y up, metres
+            self.assertAlmostEqual(float(np.ptp(back.vertices[:, 0])), printing.PLATE_MM / 1000, places=5)
+            self.assertEqual(shown["plate"], printing.PLATE_MM)
             mine = printer.run({"file": "owl.glb", "height": 40, "base": 0, "palette": ["#0000ff", "#fff"],
                                 "save": True})
             self.assertEqual(prepare.call_count, 1)                           # only the colours changed
@@ -400,6 +402,28 @@ class PrintingTests(unittest.TestCase):
         (self.root / "broken.glb").write_text("not a mesh")
         for name in ("broken.glb", "missing.glb", "../owl.glb"):
             self.assertIsNone(printer.thumbnail(name))
+
+    def test_the_size_is_the_longest_side_or_the_height(self):
+        mesh, _ = printing.solid(printing.load_glb(self.save(parts=[cube()])))
+        mesh.vertices[:, 0] *= 3                                   # 6 long, 2 wide, 2 tall: lying down
+        tall = printing.place(mesh, 40, base=0)
+        self.assertTrue(np.allclose(np.ptp(tall.vertices, axis=0), (120, 40, 40)))
+        long = printing.place(mesh, 40, base=0, fit="longest")
+        self.assertTrue(np.allclose(np.ptp(long.vertices, axis=0), (40, 40 / 3, 40 / 3)))
+        with self.assertRaises(printing.PrintError):
+            printing.place(mesh, 40, fit="width")
+        # the page measures the longest side unless told otherwise; the command too
+        from kami import webui
+        path = self.write("long.glb", glb([cube()]))
+        printer = webui.Printer(path.parent)
+        self.assertEqual(max(printer.run({"file": "long.glb", "height": 30})["size"]), 30.0)
+        self.assertEqual(printer.run({"file": "long.glb", "height": 30, "fit": "height"})["size"][2], 30.0)
+        before = os.getcwd()
+        self.addCleanup(os.chdir, before)
+        os.chdir(self.root)
+        source = self.save("lying.glb", parts=[cube()])
+        self.assertEqual(self.run_cli("print", str(source), "--size", "30", "--base", "0")[0], 0)
+        self.assertEqual(self.run_cli("print", str(source), "--height", "30", "--size", "30")[0], 2)   # one or the other
 
     def test_warnings(self):
         report = printing.Solid(pieces=2, open_edges=4)

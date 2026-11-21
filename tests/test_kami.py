@@ -3263,3 +3263,37 @@ class NetworkPatience(unittest.TestCase):
             work._run("w1", {"kind": "image"})
             self.assertEqual(work.jobs["w1"]["status"], "done")
 
+
+class PageFixes(unittest.TestCase):
+    def test_the_library_leaves_out_working_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp)
+            for name in ("owl-front.png", "_sheet.png", ".hidden.png", "gemini/gecko-front.png",
+                         "gemini/_mesh-comparison.png", "_sheets/owl-sheet.png", ".kami/x.png"):
+                path = folder / name
+                path.parent.mkdir(exist_ok=True)
+                path.write_bytes(b"x")
+            self.assertEqual(sorted(p.relative_to(folder).as_posix() for p in webui.results(folder)),
+                             ["gemini/gecko-front.png", "owl-front.png"])
+
+    def test_the_pod_says_whether_its_image_model_reads_a_negative_prompt(self):
+        from kami import server
+        pipe = mock.Mock()
+        pipe.__call__ = lambda prompt, negative_prompt=None, guidance_scale=0: None
+        for model, guidance, image, expected in (
+                ("Tongyi-MAI/Z-Image", 4.0, pipe, True),
+                ("Tongyi-MAI/Z-Image-Turbo", 0.0, pipe, False),          # no guidance: ignored
+                ("diffusers/FLUX.2-dev-bnb-4bit", 4.0, pipe, False),     # guidance-distilled
+                ("Tongyi-MAI/Z-Image", 4.0, None, None),                 # not loaded yet
+                ("", 4.0, pipe, False)):
+            with mock.patch.object(server, "IMAGE_MODEL", model), \
+                    mock.patch.dict(server.IMAGE_DEFAULTS, {"guidance": guidance}), \
+                    mock.patch.object(server.PIPES, "image", image):
+                self.assertEqual(server.reads_negative(), expected, model)
+        info = {"pod": {"id": "p1", "url": "https://p1", "status": "RUNNING"}, "ready": True, "waiting": None}
+        with mock.patch.object(cli, "load_state", return_value={"pod_id": "p1", "api_key": "k"}), \
+                mock.patch.object(cli, "status_info", return_value=info), \
+                mock.patch.object(jobs, "info", return_value={"image_model": "m", "image_negative": False}):
+            served = cli.WebBackend(config.load_config()).status()["served"]
+        self.assertIs(served["image_negative"], False)
+

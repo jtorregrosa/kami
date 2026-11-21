@@ -513,10 +513,16 @@ def base_area(mesh: Mesh) -> float:
     return float(face_areas(mesh)[on_plate].sum())
 
 
-def place(mesh: Mesh, height: float, base: float = 2.0, up: str = "y") -> Mesh:
+FITS = ("longest", "height")      # what the size in mm measures: the longest side, or the height
+
+
+def place(mesh: Mesh, height: float, base: float = 2.0, up: str = "y", fit: str = "height") -> Mesh:
     """The mesh as it goes on the plate: Z up (glTF is Y up), its lowest `base` percent
-    pressed flat so it has something to stand on, `height` mm tall, centred over the
-    origin with the base at Z = 0."""
+    pressed flat so it has something to stand on, centred over the origin with the base
+    at Z = 0, and `height` mm tall, or with `fit="longest"` `height` mm along its longest
+    side (a creature lying down is long and low: 80 mm tall, a gecko was 30 cm long)."""
+    if fit not in FITS:
+        raise PrintError(f"fit is {' or '.join(FITS)}")
     v = mesh.vertices.copy()
     if up == "y":
         v = np.stack([v[:, 0], -v[:, 2], v[:, 1]], axis=1)       # +90° about X: still right-handed
@@ -526,7 +532,7 @@ def place(mesh: Mesh, height: float, base: float = 2.0, up: str = "y") -> Mesh:
     floor = bottom + tall * max(base, 0.0) / 100
     v[:, 2] = np.maximum(v[:, 2], floor)
     v[:, 2] -= floor
-    v *= height / float(v[:, 2].max())
+    v *= height / float(v[:, 2].max() if fit == "height" else np.ptp(v, axis=0).max())
     v[:, :2] -= (v[:, :2].min(axis=0) + v[:, :2].max(axis=0)) / 2
     return Mesh(v, mesh.faces, mesh.colors)
 
@@ -748,7 +754,8 @@ class Printed:
 
 
 def prepare(source: Path, *, height: float = 80.0, base: float = 2.0, keep_cavities: bool = False,
-            up: str = "y", rebuilding: str = "auto", detail: float = DETAIL) -> tuple[Mesh, Solid]:
+            up: str = "y", rebuilding: str = "auto", detail: float = DETAIL,
+            fit: str = "height") -> tuple[Mesh, Solid]:
     """The slow half of a conversion, the same whatever the colours: the GLB as a solid on
     the plate (`solid`, `place`, and `rebuild` when it is needed or asked for)."""
     require()
@@ -761,7 +768,7 @@ def prepare(source: Path, *, height: float = 80.0, base: float = 2.0, keep_cavit
     if detail <= 0:
         raise PrintError("--detail must be more than 0 mm")
     mesh, report = solid(load_glb(source), keep_cavities)
-    mesh = place(mesh, height, base, up)
+    mesh = place(mesh, height, base, up, fit)
 
     def measure_wall(report):
         report.wall = mean_wall(mesh)
@@ -834,7 +841,7 @@ def warnings(done: Printed) -> list[str]:
     return out
 
 
-def convert(source: Path, target: Path, *, height: float = 80.0, base: float = 2.0,
+def convert(source: Path, target: Path, *, height: float = 80.0, base: float = 2.0, fit: str = "height",
             colors: int = 4, palette: list | None = None, smoothing: int = 3,
             min_patch: float = 1.0, keep_cavities: bool = False, up: str = "y",
             rebuilding: str = "auto", detail: float = DETAIL) -> Printed:
@@ -844,7 +851,7 @@ def convert(source: Path, target: Path, *, height: float = 80.0, base: float = 2
     require()
     if palette is None and not 1 <= colors <= MAX_COLORS:
         raise PrintError(f"--colors goes from 1 to {MAX_COLORS}")
-    mesh, report = prepare(source, height=height, base=base, keep_cavities=keep_cavities, up=up,
+    mesh, report = prepare(source, height=height, base=base, fit=fit, keep_cavities=keep_cavities, up=up,
                            rebuilding=rebuilding, detail=detail)
     labels, swatches, share = paint(mesh, colors=colors, palette=palette, smoothing=smoothing,
                                     min_patch=min_patch)
@@ -885,10 +892,12 @@ def thumbnail(source: Path, size: int = 256) -> bytes:
     return out.getvalue()
 
 
-def preview_glb(mesh: Mesh, labels, palette) -> bytes:
+def preview_glb(mesh: Mesh, labels, palette, plate: float | None = None) -> bytes:
     """The painted model as a GLB to look at before saving the 3MF: one primitive per
     filament, each a plain material of its colour, sharing the vertices. Y up and in
-    metres, as glTF has it; no normals, so a viewer shades it flat, facet by facet."""
+    metres, as glTF has it; no normals, so a viewer shades it flat, facet by facet.
+    With `plate` (mm), a thin square of that side under it, the printer's plate, so its
+    size is seen against what it will be printed on."""
     v = (np.stack([mesh.vertices[:, 0], mesh.vertices[:, 2], -mesh.vertices[:, 1]], axis=1)
          * 0.001).astype(np.float32)
     blob, views, accessors, primitives, materials = bytearray(), [], [], [], []
@@ -910,6 +919,19 @@ def preview_glb(mesh: Mesh, labels, palette) -> bytes:
             "baseColorFactor": [*to_linear(color).tolist(), 1.0], "metallicFactor": 0.0,
             "roughnessFactor": 0.7}})
         primitives.append({"attributes": {"POSITION": 0}, "indices": len(accessors) - 1,
+                           "material": len(materials) - 1})
+    if plate:
+        h, t = plate / 2000, 0.0008                              # half its side, its thickness (m)
+        box = np.array([[x, y, z] for y in (-t, -0.00005) for x in (-h, h) for z in (-h, h)], np.float32)
+        quads = ((0, 1, 3, 2), (4, 6, 7, 5), (0, 4, 5, 1), (2, 3, 7, 6), (0, 2, 6, 4), (1, 5, 7, 3))
+        faces = np.array([(a, b, c) for a, b, c, d in quads] + [(a, c, d) for a, b, c, d in quads], np.uint32)
+        accessors.append({"bufferView": add(box.tobytes(), 34962), "componentType": 5126, "count": 8,
+                          "type": "VEC3", "min": box.min(axis=0).tolist(), "max": box.max(axis=0).tolist()})
+        accessors.append({"bufferView": add(faces.tobytes(), 34963), "componentType": 5125,
+                          "count": int(faces.size), "type": "SCALAR"})
+        materials.append({"name": "Plate", "pbrMetallicRoughness": {
+            "baseColorFactor": [0.05, 0.05, 0.055, 1.0], "metallicFactor": 0.0, "roughnessFactor": 0.9}})
+        primitives.append({"attributes": {"POSITION": len(accessors) - 2}, "indices": len(accessors) - 1,
                            "material": len(materials) - 1})
     doc = {"asset": {"version": "2.0", "generator": f"kami {__version__}"}, "scene": 0,
            "scenes": [{"nodes": [0]}], "nodes": [{"mesh": 0}], "meshes": [{"primitives": primitives}],

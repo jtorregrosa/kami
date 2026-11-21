@@ -92,7 +92,14 @@ Your PC ── kami mesh photo.png ──HTTPS──► https://<pod>-8000.proxy
   the page never starts a pod, and a stage the pod lacks shows the `kami up -p` for it
   (`WebBackend.status()["profiles"]`). `objects()` is the library: `output_dir` and one
   folder deep, grouped by name (`VIEW_OF`: owl-left-2.png is the newest left view of
-  "owl"); `resolve()` is the only way a name becomes a file. Pictures of a job may be
+  "owl"), leaving out names that start with `_` or `.` (`kami-out/_sheets/` holds the
+  comparison sheets); `resolve()` is the only way a name becomes a file. The stage tabs
+  say where a stage can run (a dot: this pod) and tick what the object on the stage
+  already has. The negative prompt is sent only where `/v1/info`'s `image_negative` (or,
+  from an older pod, the model's defaults) says it is read. The print preview has the
+  256 mm plate under the model (`preview_glb(plate=)`), sized by its longest side unless
+  told `fit="height"`; the viewer starts three-quarter from above, which is not always
+  the model's front (the mesh models do not agree on which way a mesh faces). Pictures of a job may be
   uploads or `{file}` from the library. `Printer`: POST /api/print (`prepare` cached, so
   colours answer at once; `save` writes the 3MF), /preview/<id>.glb, /thumbs/<mesh> (a
   drawn PNG for meshes with no picture). The page builds its DOM from JSON with
