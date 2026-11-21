@@ -3208,3 +3208,58 @@ class MultiviewDefault(unittest.TestCase):
         self.assertEqual(server.MESH_DEFAULTS.get("multiview_mode"), "multidiffusion")
         self.assertEqual(set(server.MULTIVIEW_MODES), set(webui.MULTIVIEW_MODES))
 
+
+class NetworkPatience(unittest.TestCase):
+    """A job on the pod is not thrown away because this PC lost the network for a while."""
+
+    def test_asking_again_while_the_pod_cannot_be_reached(self):
+        answers = [jobs.Unreachable("Could not reach the pod: no DNS"), jobs.Unreachable("again"), "fine"]
+
+        def call():
+            answer = answers.pop(0)
+            if isinstance(answer, Exception):
+                raise answer
+            return answer
+        told = []
+        self.assertEqual(jobs.patiently(call, sleep=lambda s: None, waiting=told.append), "fine")
+        self.assertEqual(len(told), 2)
+        with self.assertRaisesRegex(jobs.Unreachable, "may still be on the pod"):
+            jobs.patiently(mock.Mock(side_effect=jobs.Unreachable("Could not reach the pod: x")),
+                           patience=0, sleep=lambda s: None)
+        # a refusal is an answer: it is not asked again
+        refused = mock.Mock(side_effect=jobs.JobError("Checking the job: 404"))
+        with self.assertRaises(jobs.JobError):
+            jobs.patiently(refused, sleep=lambda s: None)
+        refused.assert_called_once()
+
+    def test_a_request_that_gets_no_answer_is_unreachable(self):
+        with mock.patch.object(jobs.urllib.request, "urlopen", side_effect=jobs.urllib.error.URLError("getaddrinfo failed")), \
+                mock.patch.object(jobs.time, "sleep"):
+            with self.assertRaisesRegex(jobs.Unreachable, "Could not reach the pod"):
+                jobs._request("https://x/v1/jobs/j", "k")
+        self.assertTrue(issubclass(jobs.Unreachable, jobs.JobError))
+
+    def test_a_job_survives_a_gap_in_the_network(self):
+        done = (200, json.dumps({"id": "j", "status": "done", "files": ["a.glb"]}).encode())
+        gap = jobs.Unreachable("Could not reach the pod: getaddrinfo failed")
+        with mock.patch.object(jobs, "_request", side_effect=[gap, gap, done]), mock.patch.object(jobs.ui, "Progress"):
+            job = jobs.wait("https://x", "k", {"id": "j", "status": "running"}, "Mesh", sleep=lambda s: None)
+        self.assertEqual(job["status"], "done")
+        with tempfile.TemporaryDirectory() as tmp, \
+                mock.patch.object(jobs, "_request", side_effect=[gap, (200, b"glb")]):
+            saved = jobs.download("https://x", "k", job, Path(tmp), sleep=lambda s: None)
+            self.assertEqual([p.read_bytes() for p in saved], [b"glb"])
+
+    def test_the_page_keeps_asking_too(self):
+        backend = mock.Mock()
+        backend.target.return_value = ("https://pod", "key")
+        gap = jobs.Unreachable("Could not reach the pod: getaddrinfo failed")
+        with tempfile.TemporaryDirectory() as tmp, \
+                mock.patch.object(jobs, "submit", return_value={"id": "r1", "status": "running"}), \
+                mock.patch.object(jobs, "check", side_effect=[gap, {"id": "r1", "status": "done", "files": []}]), \
+                mock.patch.object(jobs, "download", return_value=[]):
+            work = webui.Work(backend, Path(tmp), sleep=lambda s: None)
+            work.jobs["w1"] = {"id": "w1", "status": "sending"}
+            work._run("w1", {"kind": "image"})
+            self.assertEqual(work.jobs["w1"]["status"], "done")
+

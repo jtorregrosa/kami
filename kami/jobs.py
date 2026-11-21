@@ -21,6 +21,10 @@ POLL_EVERY = 2                  # seconds between job status checks
 JOB_TIMEOUT = 30 * 60           # give up waiting (the job keeps running on the pod)
 REQUEST_TIMEOUT = 60
 RETRIES = 3                     # transient network errors per request
+# How long a job already on the pod is waited for while the pod cannot be reached. The
+# job goes on there whatever this PC's network does: a mesh that was finished and being
+# saved was lost to a few seconds without DNS, when one request gave up after RETRIES.
+UNREACHABLE_PATIENCE = 10 * 60
 
 # Image formats TRELLIS.2 (PIL) reads; anything else is refused before a job is sent.
 # what kami-server reads (server.open_image)
@@ -31,6 +35,30 @@ MAX_IMAGE_BYTES = 48 * 1024 * 1024
 
 class JobError(ConfigError):
     pass
+
+
+class Unreachable(JobError):
+    """The pod did not answer at all (no network, no DNS, a timeout): not a refusal."""
+
+
+def patiently(call, patience: float = UNREACHABLE_PATIENCE, sleep=time.sleep, waiting=None):
+    """`call()`, tried again while the pod cannot be reached, for up to `patience` seconds
+    in a row. `waiting(seconds)` is told how long it has been. For what happens after a
+    job is on the pod (asking how it goes, fetching its files): the work is done or under
+    way there, and giving up would throw it away."""
+    lost = None
+    while True:
+        try:
+            return call()
+        except Unreachable as e:
+            lost = time.monotonic() if lost is None else lost
+            gone = time.monotonic() - lost
+            if gone >= patience:
+                raise Unreachable(f"{str(e).splitlines()[0]}\nNo answer for {ui.duration(gone)}. The job may "
+                                  "still be on the pod: `kami status`, `kami jobs`.") from None
+            if waiting:
+                waiting(gone)
+            sleep(POLL_EVERY)
 
 
 def _request(url: str, api_key: str, body: dict | None = None, timeout: float = REQUEST_TIMEOUT):
@@ -51,7 +79,7 @@ def _request(url: str, api_key: str, body: dict | None = None, timeout: float = 
         except (urllib.error.URLError, TimeoutError, ConnectionError) as e:
             last = e
             time.sleep(1 + attempt * 2)
-    raise JobError(f"Could not reach the pod: {last}\n`kami status` to check it.")
+    raise Unreachable(f"Could not reach the pod: {last}\n`kami status` to check it.")
 
 
 def _json(status: int, raw: bytes, what: str) -> dict:
@@ -148,18 +176,20 @@ def wait(url: str, api_key: str, job: dict, label: str, sleep=time.sleep) -> dic
             for _ in range(POLL_EVERY * 4):
                 progress.tick()
                 sleep(0.25)
-            job = _json(*_request(f"{url}/v1/jobs/{job['id']}", api_key), "Checking the job")
+            job = patiently(lambda: _json(*_request(f"{url}/v1/jobs/{job['id']}", api_key), "Checking the job"),
+                            sleep=sleep, waiting=lambda gone: progress.phase(
+                                f"{label}: cannot reach the pod, trying again ({ui.duration(gone)})"))
     finally:
         progress.stop()
 
 
-def download(url: str, api_key: str, job: dict, out_dir: Path) -> list[Path]:
+def download(url: str, api_key: str, job: dict, out_dir: Path, sleep=time.sleep) -> list[Path]:
     """Save the job's files into out_dir (never overwriting: name-2.glb, name-3.glb...)."""
     out_dir.mkdir(parents=True, exist_ok=True)
     saved = []
     for name in job.get("files") or []:
-        status, data = _request(f"{url}/v1/jobs/{job['id']}/files/{name}", api_key,
-                                timeout=5 * REQUEST_TIMEOUT)
+        status, data = patiently(lambda: _request(f"{url}/v1/jobs/{job['id']}/files/{name}", api_key,
+                                                  timeout=5 * REQUEST_TIMEOUT), sleep=sleep)
         if status >= 400:
             _json(status, data, f"Downloading {name}")
         path = free_path(out_dir / name)

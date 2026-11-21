@@ -303,11 +303,12 @@ class Work:
                 if time.monotonic() - started > jobs.JOB_TIMEOUT:
                     raise jobs.JobError("Taking too long; it keeps running on the pod (`kami logs`)")
                 self.sleep(jobs.POLL_EVERY)
-                remote = jobs.check(url, key, remote["id"])
+                # the job goes on there while this PC's network is away: keep asking
+                remote = jobs.patiently(lambda: jobs.check(url, key, remote["id"]), sleep=self.sleep)
             if remote["status"] == "error":
                 raise jobs.JobError(remote.get("error") or "failed on the pod (`kami logs`)")
             self._set(job_id, status="downloading", position=None)
-            saved = jobs.download(url, key, remote, self.folder)
+            saved = jobs.download(url, key, remote, self.folder, sleep=self.sleep)
             self._set(job_id, status="done", files=[p.name for p in saved], finished=time.time())
         except (ConfigError, OSError, KeyError, ValueError) as e:
             self._set(job_id, status="error", error=str(e).splitlines()[0] if str(e) else type(e).__name__,

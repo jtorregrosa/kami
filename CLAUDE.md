@@ -2,11 +2,13 @@
 
 ## What this project is
 
-`kami` is a small Python CLI (standard library only, Python 3.11+) that manages the
-lifecycle of a cloud GPU pod on [RunPod](https://runpod.io) or [vast.ai](https://vast.ai)
-(chosen by `provider` in `kami.toml`) which runs **kami-server**: TRELLIS.2 for
-image → textured 3D mesh (GLB) and a diffusers pipeline for text → image. The CLI sends
-jobs to the pod and saves the results locally.
+`kami` is a small Python CLI (Python 3.11+) that manages the lifecycle of a cloud GPU pod
+on [RunPod](https://runpod.io) or [vast.ai](https://vast.ai) (chosen by `provider` in
+`kami.toml`) which runs **kami-server**: Pixal3D or TRELLIS.2 for image → textured 3D
+mesh (GLB), and diffusers pipelines for text → image and for the views of an object. The
+CLI sends jobs to the pod and saves the results locally; `kami print` then turns a mesh
+into a 3MF for a multicolour printer, on the PC. What it is for: figures to 3D print,
+among them flexi models whose joints are cut afterwards in `../jointwright`.
 
 It was forked from `../ronin` (the same tool for LLMs) and keeps its pod lifecycle, cost
 guard, providers, stock waiting, budget and cost reporting. A fix in that shared plumbing
@@ -24,8 +26,6 @@ Your PC ── kami mesh photo.png ──HTTPS──► https://<pod>-8000.proxy
 - `kami/cli.py` — argparse CLI and the commands (`init`, `doctor`, `gpus`, `prices`,
   `profiles`, `volume`, `up`, `down`, `status`, `cost`, `logs`, `watchdog`, `mesh`, `image`,
   `views`, `jobs`, `reload`, `print`, `ui`).
-- (`server.FRONT_HINT`, what a views job adds to its front picture, is the default of the
-  `front_hint` parameter: a job or `views_defaults` may replace it, "" drops it.)
 - `kami/server.py` — runs *inside the pod* (its source is sent in `KAMI_SERVER_SRC` and
   run with `python3 -c`): loads the pipelines, serves `/health`, `/metrics`, `/v1/info`
   and the jobs API (`POST /v1/jobs`, `GET /v1/jobs` (all, with stage and progress),
@@ -44,7 +44,9 @@ Your PC ── kami mesh photo.png ──HTTPS──► https://<pod>-8000.proxy
   South Korea) and the `-hunyuan` image (`docker/Dockerfile.hunyuan`, built FROM the base).
   "views" jobs (`views_model`, `KAMI_VIEWS_*`): a front picture (image_model, or FLUX.2
   itself) and a diffusers editing pipeline with a camera LoRA ("<sks> back view ...")
-  turning around it; Qwen-Image-Edit gets true CFG, FLUX.2 guidance.
+  turning around it; Qwen-Image-Edit gets true CFG, FLUX.2 guidance. `FRONT_HINT`, what
+  such a job adds to its front picture, is the default of the `front_hint` parameter: a
+  job or `views_defaults` may replace it, "" drops it.
   Stdlib HTTP; torch / trellis2 / diffusers are imported lazily, so the tests import it
   without them. kami never imports it at runtime.
 - `kami/jobs.py` — client side of the jobs API: submit, poll with a progress line, download
@@ -52,10 +54,12 @@ Your PC ── kami mesh photo.png ──HTTPS──► https://<pod>-8000.proxy
   label, purpose, text; `print_hint(text, preset)` is the one in force: `--preset`, then
   kami.toml's `print_hint`, then its `print_preset`, then figure; written in the positive,
   and flexi names neither joints nor a base, since jointwright cuts the joints later).
-  `PRINT_HINT` / `printable`: the hint every prompt gets on the
-  client (CLI `print_prompt`, page `webui._sent`) so the picture is printable: flat base,
-  one piece, `{colors}` flat colours, matte. On by default; `--as-written`, `print_hint`
-  in kami.toml. File names and labels keep the prompt as written.
+  `PRINT_HINT` / `printable`: the hint every prompt gets on the client (CLI
+  `print_prompt`, page `webui._sent`) so the picture is printable; `PRINT_NEGATIVES`, what
+  each preset keeps out. On by default; `--as-written`, `print_hint` in kami.toml (a
+  custom one may say `{colors}`). File names and labels keep the prompt as written.
+  `patiently` keeps asking a job's state and files while the pod cannot be reached
+  (`Unreachable`), for `UNREACHABLE_PATIENCE`: the job goes on there meanwhile.
 - `kami/printing.py` — `kami print`, all on the PC: GLB -> 3MF for a multicolour printer.
   `load_glb` (own parser; one colour per triangle from the base colour texture), `solid`
   (weld, drop inner shells and slivers; reports open / non-manifold edges, fills nothing),
@@ -105,6 +109,9 @@ Your PC ── kami mesh photo.png ──HTTPS──► https://<pod>-8000.proxy
   `.github/workflows/server-image.yml` builds and pushes it to ghcr.io.
 - `tools/convert_dinov3.py` — one-off helper (needs torch, not part of the package): Meta's
   DINOv3 `.pth` → transformers format → a private HF repo, for `dino_model`.
+- `tools/prompt_grid.py`, `tools/compare_meshes.py` — how wordings and mesh models are
+  compared: the same subjects and seeds through each wording on the pod that is up, as
+  one sheet; several GLBs side by side from above and four sides.
 - `tests/` — `python -m unittest`.
 
 ## Conventions
@@ -123,110 +130,74 @@ Your PC ── kami mesh photo.png ──HTTPS──► https://<pod>-8000.proxy
   repos, GPU memory).
 - User-facing docs are in English (`README.md`). Keep the command table in sync.
 
-## Not verified yet
+## What has run, and what has not
 
-The client side is unit-tested with mocks. Verified on a real 4090 pod: the Docker image,
-TRELLIS.2 with `dino_model` (transformers 5 layout aliased by `fit_transformers`), and an
-image -> GLB job end to end (PNG textures), `kami reload` (on an L40S). Pixal3D on a 4090
-(`pixal3d`): 4 posed views from `kami views` -> a coherent GLB, and a single picture (both
-~2.5 min at 1024 in its low-VRAM mode; 1536 with 4 views ran out of 24 GB); its meshes
-are not watertight. Boot ~19 min (48 GB of weights). Images go through
-`server.open_image` (Pillow; pillow-heif for HEIC; OpenCV if Pillow fails; EXIF turned;
-almost opaque alpha dropped so the background is removed). Not run on a real GPU yet: `offload` moving the
-pipelines between CPU and GPU, Z-Image-Turbo, text-to-mesh, the job
-progress hooks, TRELLIS.2 multiview, a Hunyuan3D-2mv mesh from `kami views` pictures
-(left/right: Hunyuan's example left.png faces the picture's left, the LoRAs' "left side
-view" faces right, so VIEW_ANGLES swaps them; untested on an asymmetric object) (`kami views` ran: views-qwen works on an A100, jinja2 upgraded on boot by
-`ensure_packages`; views-flux loads, LoRA on all 170 layers, but it barely changes the
-picture even at lora_scale 3, left/back = the front), a whole Hunyuan3D-2 job (the -hunyuan image builds
-and its pipelines load on a 4090, with `dinov2_v4_checkpoints` and
-`trust_hunyuan_pipelines`; the first jobs failed in pymeshlab, whose plugins needed
-libOpenGL.so.0, now in the image: shape clean-up and Hunyuan3D-Paint never ran), and the guard deleting the pod through GraphQL (the pod-scoped key got 403
-from api.runpod.io/v2 and rest.runpod.io did not resolve: the old guard never deleted it).
-Check them on the next pod (`kami up --keep-on-failure`, `kami logs`).
+The client is unit-tested with mocks. Everything below ran on real RunPod pods unless it
+says otherwise; dates are when it was last seen.
 
-`kami print`: the owl's Pixal3D GLB (a double shell: an outer closed surface and the same
-one inside, facing inwards, joined by 6 edges) becomes a closed solid of 251k triangles in
-~2.5 s; Bambu Studio 2.9.1's command line loads the 3MF with nothing to repair and keeps
-the paint (checked by exporting it back). Not checked: the file opened in Bambu Studio's
-window (whether it offers to map the standard 3MF colours, and that paint wins if both
-are there), a sliced or printed model, OrcaSlicer. TRELLIS.2 meshes (duck.glb) are left
-with ~100 non-manifold edges after cleaning, so they are rebuilt: closed, 630k triangles
-at 0.3 mm, ~9 s, and Bambu Studio's command line loads that too with nothing to repair.
-Not met yet: a skin with an opening wider than a cube (it should come out reported as a
-hollow skin; only built by hand in a test). The model's front does not always face the
-plate's front (Pixal3D and TRELLIS.2 differ): turn it in the slicer.
+**The pod and the image.** The Docker image, `kami reload`, `offload` between two image
+models (the `views` pod), boot progress and stock waiting. `kami up` takes 4 to 16
+minutes depending on the weights and the day (`mesh`, 48 GB of them: 7 to 16). Images
+go through `server.open_image` (Pillow; pillow-heif for HEIC; OpenCV if Pillow fails;
+EXIF turned; almost opaque alpha dropped so the background is removed).
 
-The redesigned `kami ui` was looked at in a browser with no pod (Print: the owl painted,
-2 colours, "My filaments") and with pretend pods (a backend returning a fixed status):
-Concept on a views-qwen-like pod, Mesh on a pixal3d-like pod with a library object's four
-views filling the slots, the library with drawn thumbnails, a phone-width layout. Never
-with a real pod: no job has been sent from the new page, so "Make views", "Try fronts",
-"Redo" of one view, "Make mesh" from library pictures and a finished job landing on the
-stage are untested end to end (their request bodies are unit-tested).
+**Fronts** (2026-11-20; 152 pictures, the same three subjects and two seeds through each
+model and wording; sheets in `kami-out/prompt-tests/sheets/`; `tools/prompt_grid.py` is
+how). What matters first is that the subject stays itself.
+- Z-Image-Turbo keeps the subject and ignores pose and camera, and has no negative prompt.
+- The full Z-Image (~32 s a picture on an A100) obeys pose and reads the negative prompt,
+  but draws the hint's shape words over the subject (a snake as a sausage) and takes
+  colour words at their value (blocks of colour, or unpainted clay).
+- FLUX.2 [dev] 4-bit as `image_model` (`fronts-flux`, ~62 s a picture on an L40S) kept
+  every subject recognisable, facing the camera, in its own colours, with no base.
+- None of them lays a snake in a straight line. Gemini, by hand, did, and followed
+  "no antennae": its pictures were the best of the day.
+- A prompt draws what it names, also after "no" or "without". A preset is short, leans on
+  a style the model knows, says nothing of anatomy and does not count colours. Judging a
+  wording by one picture got three presets wrong in a row: compare on a grid.
+- Presets: `flexi` is the stylised wording as tried on FLUX.2; `figure` (the same style,
+  standing) and lowpoly, bust, relief, natural have never run. Their negative prompts are
+  read only by a model with guidance (the full Z-Image).
 
-Print presets on a real `views` pod (2026-11-20): `figure` gave a clean vinyl figure on
-its base, with consistent views ("cute caterpillar", "cute snake"). `flexi` went through
-two wordings that day, both recorded at `PRINT_PRESETS["flexi"]`: the first gave a good
-gecko but a segmented caterpillar and a cut-out snake; the second, long and all about
-shape, gave a shapeless lump. Lesson kept in a test: a preset is short, leans on a style
-the model knows, and says nothing of anatomy. The wording in use came out of 50 front
-pictures, same subjects and seeds through ten wordings (`kami-out/prompt-tests/`, sheets in `sheets/`, made
-with `kami image --as-written --seed`, seconds each: the way to tune a preset, instead of
-judging one picture). It has not been through `kami views` or a mesh yet; lowpoly, bust,
-relief and natural have never run. A "without
-antenna" in a prompt drew antennae. No preset sets its own front hint now; the mechanism
-(`preset_front`) stays. Open: whether
-ring views at the object's height suit a ground-hugging creature at all, or one picture
-from above into `kami mesh` does better. The pod needs `kami reload` to take a preset's
-front hint (`front_hint`); "Try fronts" gets it through the relay either way.
+**Views.** `kami views` with Qwen-Image-Edit and fal's LoRA: coherent when the front is a
+front (an owl, a gecko); a front that came out as a profile or from above was turned
+wrongly. Diagonal views never tried. `views-flux` (FLUX.2 turning the camera): its LoRA
+barely acts, left and back came out as the front.
 
-The printing hint (`jobs.PRINT_HINT`) has never been sent to a pod: whether Z-Image-Turbo
-and Qwen follow it (flat colours, base), and whether `kami print` then gives cleaner
-colours than the glossy owl, is to be compared on the next `views-qwen` pod, same concept
-and seed, with and without `--as-written`.
+**Meshes** (2026-11-20; `kami-out/gemini/mesh-comparison.png`, `tools/compare_meshes.py`).
+- Pixal3D places each named view at a fixed camera (object height, 90 degrees apart).
+  With Qwen's posed views it gave a coherent owl. With pictures drawn elsewhere (Gemini)
+  it doubled what did not fit: a gecko whose front and back were drawn from above came
+  out with repeated features; retaken at ground level, cleaner. From one picture
+  (three-quarter front) it was clean. Its meshes are not closed. At 1536 with four views
+  it ran out of memory on 24 GB and on an L40S (45 GiB): `PIXAL_LOW_VRAM_BELOW_GIB = 60`.
+- TRELLIS.2 with `--views` assumes no camera, and gave the best gecko and caterpillar from
+  the same four pictures. Of its modes, multidiffusion kept painted details (spots, an
+  eye) sharp where stochastic blurred them; it is the default, on that one comparison.
+- So: views from `kami views` -> Pixal3D (`mesh`); pictures from anywhere -> `trellis`,
+  or one picture.
+- Textures: the base colour comes out a little less saturated than the pictures (a lime
+  (168,198,3) as (150,151,14)), and the models also guess a metallic value (~0.4 on a
+  toy), which a viewer shows as a dull, dark surface. It is not an sRGB mix-up. The
+  page's viewer sets metallic to 0, since only the base colour is printed.
 
-Profiles in the shipped `kami.toml` (2026-11-20): `views` (Z-Image + Qwen-Image-Edit, was
-`views-qwen`), `mesh` (Pixal3D, was `pixal3d`, the default) and `fronts-flux` (FLUX.2
-[dev] 4-bit as `image_model` alone). `views` tried the full Z-Image (32 steps, guidance 4)
-for a day and went back to Turbo (see "Front models compared" below). Both the full
-Z-Image and FLUX.2 as `image_model` load on the current server image. The
-rest are commented out at the end of the file: `trellis` (TRELLIS.2, was `mesh`), `image`,
-`studio`, `studio-24`, `hunyuan`, `hunyuan-mv`, `views-flux`. Notes above written before
-that use the old names. `kami init`'s template in config.py still writes a TRELLIS.2
-`mesh` profile.
+**`kami print`.** A Pixal3D owl (a double shell) and a TRELLIS.2 duck (non-manifold
+edges, so rebuilt) become closed solids; Bambu Studio 2.9.1's command line loads both
+3MFs with nothing to repair and keeps the paint. A Gemini caterpillar went from four
+pictures to a closed 3MF in three colours.
 
-Front models compared on real pods (2026-11-20; 152 pictures, same three subjects and two
-seeds, sheets in `kami-out/prompt-tests/sheets/`, $2.67): what matters first is that the
-subject stays itself. Z-Image-Turbo keeps the subject and ignores pose and camera. The
-full Z-Image (loads on the current image, ~32 s a picture on an A100) obeys pose and its
-negative prompt, but draws the hint's shape words over the subject (a snake as a sausage
-or a row of balls) and takes colour words at their value (blocks, or unpainted clay).
-FLUX.2 [dev] 4-bit as `image_model` (`fronts-flux`: loads, ~62 s a picture on an L40S)
-kept every subject recognisable, made real front views, natural colours and no base, in
-all three styles tried; "stylised animal figurine with simplified natural anatomy" read
-best for printing. None of them lays a snake in a straight line. After it: `flexi` is
-that stylised wording as tried (row T); `figure` is the same style standing on a base,
-not yet run; `views` went back to Z-Image-Turbo for one-go jobs, and fronts are meant to
-come from `fronts-flux`. Not done: views or a mesh from a FLUX.2 front; lowpoly, bust,
-relief and natural on any model. The presets' negative prompts are read only by a model
-with guidance (the full Z-Image); FLUX.2 and Turbo ignore them.
-
-Meshes from pictures drawn elsewhere (2026-11-20; Gemini made a cartoon gecko and a
-caterpillar, front, left, back and right; `kami-out/gemini/mesh-comparison.png`):
-Pixal3D places each named view at a fixed camera (object height, 90 degrees apart), and
-views that are not there make it double things: a gecko whose front and back were drawn
-from above came out with repeated features and a straightened tail; with those two
-retaken at ground level it was cleaner, the tail still straight. From one picture
-(three-quarter front) Pixal3D was clean. TRELLIS.2 with `--views` assumes no camera and
-gave the best gecko and caterpillar from the same four pictures: the first run of
-TRELLIS.2 multiview on a GPU. Of its two modes, multidiffusion kept painted details
-(the gecko's spots, its eye) sharp where stochastic blurred them, with a darker texture;
-it is the default since, on that one comparison. So: views
-from `kami views` (Qwen, posed) -> Pixal3D; pictures from anywhere -> the `trellis`
-profile, or one picture. Pixal3D at 1536 with four views ran out of memory on an L40S
-(45 GiB), hence `PIXAL_LOW_VRAM_BELOW_GIB = 60`. `kami up -p mesh` took 7 to 16 minutes.
-Every mesh's texture looked duller than its pictures; not looked into.
+**Not done yet.**
+- A 3MF opened in Bambu Studio's window, sliced, or printed; OrcaSlicer.
+- Views or a mesh from a FLUX.2 front; a job sent from `kami ui` to a real pod (its
+  request bodies are unit-tested, and the page was looked at with pretend pods).
+- Text-to-mesh, Hunyuan3D-2 (its image builds and loads; its first jobs failed in
+  pymeshlab for a missing library, since added; never run again), a Hunyuan3D-2mv mesh.
+- The guard deleting the pod through GraphQL (a pod-scoped key got 403 once).
+- A hollow skin with an opening wider than a cube in `rebuild` (only built in a test).
+- A model's front does not always face the plate's front (Pixal3D and TRELLIS.2 differ).
+- `kami init`'s template in config.py still writes one TRELLIS.2 profile called `mesh`;
+  the shipped `kami.toml` has `views`, `mesh` (Pixal3D, the default), `fronts-flux` and
+  `trellis`, with image, studio, studio-24, hunyuan, hunyuan-mv and views-flux commented.
 
 ## Working notes
 

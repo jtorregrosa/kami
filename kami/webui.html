@@ -173,6 +173,7 @@ model-viewer { --poster-color: transparent; }
 .warns { margin: 0; padding-left: 18px; color: var(--warn); font-size: 13px; }
 .next { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; border-top: 1px solid var(--line); padding-top: 12px; }
 .next .grow { flex: 1; min-width: 200px; }
+.next a { color: var(--text); }
 
 /* jobs */
 section.block { margin: 22px 0; }
@@ -1039,8 +1040,20 @@ function meshControls() {
   return form;
 }
 function viewer(src, alt) {
-  return el("model-viewer", {src, alt, "camera-controls": true, "auto-rotate": true, "shadow-intensity": "1",
-                             exposure: "1", "interaction-prompt": "none"});
+  const shown = el("model-viewer", {src, alt, "camera-controls": true, "auto-rotate": true, "shadow-intensity": "1",
+                                    exposure: "1", "interaction-prompt": "none"});
+  // The mesh models also guess how metallic each part is (about 0.4 on a toy gecko), and a
+  // viewer darkens a metal that has nothing to reflect: the mesh looked duller than its
+  // pictures. What is printed is the base colour alone, so that is what is shown.
+  shown.addEventListener("load", () => {
+    try {
+      for (const material of shown.model.materials) {
+        material.pbrMetallicRoughness.setMetallicFactor(0);
+        material.pbrMetallicRoughness.setRoughnessFactor(1);
+      }
+    } catch (e) {}
+  });
+  return shown;
 }
 function strip(o) {
   const files = VIEW_ORDER.filter(v => o.views[v]).map(v => o.views[v]).concat(o.images);
