@@ -114,7 +114,11 @@ Your PC ── kami mesh photo.png ──HTTPS──► https://<pod>-8000.proxy
   with the models' and `kami print`'s parameters, in each stage's settings dialog
   (`settings()`: a gear beside the form's title, a `<dialog>` inside the form so its
   fields stay the form's; `group()` sections, `field(label, input, help)` with an (i)
-  from `HELP`). The page keeps them in localStorage (`kami.concept`, `kami.print`). Host header checked; POSTs need the page's
+  from `HELP`; an empty field shows the default it stands for, `.changed` when it differs).
+  The page keeps them in localStorage (`kami.concept`, `kami.print`), with the library's
+  search bar state (`kami.library`) and the hidden cards (`kami.hidden`; hiding never
+  touches a file). The header shows the pod's cost so far and the guard's time left
+  (`#pod-cost`, `#pod-life`). Host header checked; POSTs need the page's
   token, JSON and same Origin. `cli.WebBackend` gives it the pod status, target, `down`.
 - `kami/watchdog.py`, `kami/ui.py`, `kami/mascot.py` — local guard, console output, mascot.
 - `docker/Dockerfile.pixal3d` — Pixal3D + NAF (pinned) + natten 0.17.5 wheel on top of the base.

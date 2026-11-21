@@ -229,7 +229,12 @@ terminal) and the **library**: everything in `output_dir` and the folders direct
 it, grouped by object, so `owl-front.png`, `owl-left.png`, `owl-front.glb` and
 `owl-front.3mf` are one card. Click one to put it on the stage. A file or folder whose
 name starts with `_` or `.` is left out: a place for comparison sheets and other working
-files (`kami-out/_sheets/`).
+files (`kami-out/_sheets/`). Above the cards: a search by name or folder, a filter by how
+far an object has got (without a mesh, with a mesh, with a 3MF), the order (newest first or by name),
+and **Hidden**: each card has a Hide button that takes it out of the library without
+touching its files (the browser remembers which), and Hidden shows those to bring back.
+In Print, the colours found are listed as swatches in slot order, and "Use these as my
+filaments" turns them into a palette of your own to adjust.
 
 The page is served on 127.0.0.1 only, and only that page can act: other sites cannot
 send jobs or delete the pod. kami relays the jobs, so the pod's key never reaches the
