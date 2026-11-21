@@ -1899,7 +1899,8 @@ def cmd_print(args, cfg: Config | None) -> int:
             done = printing.convert(source, target, height=mm, fit=fit, base=args.base,
                                     colors=args.colors, palette=palette, smoothing=args.smooth,
                                     min_patch=args.min_patch, keep_cavities=args.keep_cavities,
-                                    up=args.up, rebuilding=args.rebuild, detail=args.detail)
+                                    up=args.up, rebuilding=args.rebuild, detail=args.detail,
+                                    turn=args.turn)
         except printing.PrintError as e:
             if len(sources) == 1:
                 raise
@@ -2354,6 +2355,9 @@ def main(argv: list[str] | None = None) -> None:
                    help="the grid a rebuilt surface is drawn on; finer detail is lost (default: 0.3)")
     p.add_argument("--keep-cavities", action="store_true",
                    help="keep the surfaces inside the model (they print as hollows)")
+    p.add_argument("--turn", type=int, choices=(0, 90, 180, 270), default=0, metavar="DEG",
+                   help="turn it about the vertical (0, 90, 180, 270; anticlockwise from above) "
+                        "so its front faces the front of the plate")
     p.add_argument("--up", choices=("y", "z"), default="y",
                    help="the mesh's up axis (default: y, as in every GLB)")
     p.add_argument("-o", "--output", metavar="PATH",

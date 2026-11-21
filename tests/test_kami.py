@@ -1490,7 +1490,17 @@ class Integrity(ProjectTestCase):
     def test_shipped_configs_are_sound(self):
         config.load_config(config.SOURCE_ROOT / "kami.toml")
         import tomllib
-        self.assertEqual(config.validate(tomllib.loads(config.STARTER_CONFIG)), [])
+        starter = tomllib.loads(config.STARTER_CONFIG)
+        self.assertEqual(config.validate(starter), [])
+        # `kami init` writes the profiles the shipped kami.toml uses, Pixal3D as `mesh`
+        shipped = tomllib.loads((config.SOURCE_ROOT / "kami.toml").read_text(encoding="utf-8"))
+        self.assertEqual(set(starter["profiles"]), set(shipped["profiles"]))
+        for name, profile in starter["profiles"].items():
+            for key, value in profile.items():
+                if key != "container":
+                    self.assertEqual(value, shipped["profiles"][name][key], (name, key))
+        self.assertEqual(starter["profiles"]["mesh"]["mesh_model"], "TencentARC/Pixal3D")
+        self.assertIn(config.PLACEHOLDER, starter["profiles"]["mesh"]["container"])
 
     def test_wrong_types_are_reported_not_raised(self):
         text = self.problems(MINIMAL + 'disk_gb = "big"\n')

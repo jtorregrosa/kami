@@ -514,18 +514,26 @@ def base_area(mesh: Mesh) -> float:
 
 
 FITS = ("longest", "height")      # what the size in mm measures: the longest side, or the height
+TURNS = (0, 90, 180, 270)         # degrees about the vertical, anticlockwise seen from above
 
 
-def place(mesh: Mesh, height: float, base: float = 2.0, up: str = "y", fit: str = "height") -> Mesh:
+def place(mesh: Mesh, height: float, base: float = 2.0, up: str = "y", fit: str = "height",
+          turn: int = 0) -> Mesh:
     """The mesh as it goes on the plate: Z up (glTF is Y up), its lowest `base` percent
     pressed flat so it has something to stand on, centred over the origin with the base
     at Z = 0, and `height` mm tall, or with `fit="longest"` `height` mm along its longest
-    side (a creature lying down is long and low: 80 mm tall, a gecko was 30 cm long)."""
+    side (a creature lying down is long and low: 80 mm tall, a gecko was 30 cm long).
+    `turn` spins it about the vertical, anticlockwise seen from above, so that its front
+    faces the front of the plate (-Y, where glTF's +Z goes): the mesh models do not agree
+    on which way a mesh faces."""
     if fit not in FITS:
         raise PrintError(f"fit is {' or '.join(FITS)}")
+    if turn not in TURNS:
+        raise PrintError(f"--turn is {', '.join(map(str, TURNS))} (degrees)")
     v = mesh.vertices.copy()
     if up == "y":
         v = np.stack([v[:, 0], -v[:, 2], v[:, 1]], axis=1)       # +90° about X: still right-handed
+    v = _turn(v, turn)
     bottom, tall = v[:, 2].min(), float(np.ptp(v[:, 2]))
     if tall <= 0:
         raise PrintError("The mesh is flat: it has no height to print")
@@ -535,6 +543,20 @@ def place(mesh: Mesh, height: float, base: float = 2.0, up: str = "y", fit: str 
     v *= height / float(v[:, 2].max() if fit == "height" else np.ptp(v, axis=0).max())
     v[:, :2] -= (v[:, :2].min(axis=0) + v[:, :2].max(axis=0)) / 2
     return Mesh(v, mesh.faces, mesh.colors)
+
+
+def _turn(v, turn: int):
+    for _ in range(turn // 90):
+        v = np.stack([-v[:, 1], v[:, 0], v[:, 2]], axis=1)        # 90° about Z, exactly
+    return v
+
+
+def turned(mesh: Mesh, turn: int) -> Mesh:
+    """A placed mesh turned about the vertical (see `place`), without preparing it again:
+    it is centred over the origin, so it stays where it was on the plate."""
+    if turn not in TURNS:
+        raise PrintError(f"--turn is {', '.join(map(str, TURNS))} (degrees)")
+    return Mesh(_turn(mesh.vertices, turn), mesh.faces, mesh.colors) if turn else mesh
 
 
 # -- colours -----------------------------------------------------------------------------
@@ -755,7 +777,7 @@ class Printed:
 
 def prepare(source: Path, *, height: float = 80.0, base: float = 2.0, keep_cavities: bool = False,
             up: str = "y", rebuilding: str = "auto", detail: float = DETAIL,
-            fit: str = "height") -> tuple[Mesh, Solid]:
+            fit: str = "height", turn: int = 0) -> tuple[Mesh, Solid]:
     """The slow half of a conversion, the same whatever the colours: the GLB as a solid on
     the plate (`solid`, `place`, and `rebuild` when it is needed or asked for)."""
     require()
@@ -768,7 +790,7 @@ def prepare(source: Path, *, height: float = 80.0, base: float = 2.0, keep_cavit
     if detail <= 0:
         raise PrintError("--detail must be more than 0 mm")
     mesh, report = solid(load_glb(source), keep_cavities)
-    mesh = place(mesh, height, base, up, fit)
+    mesh = place(mesh, height, base, up, fit, turn)
 
     def measure_wall(report):
         report.wall = mean_wall(mesh)
@@ -844,7 +866,7 @@ def warnings(done: Printed) -> list[str]:
 def convert(source: Path, target: Path, *, height: float = 80.0, base: float = 2.0, fit: str = "height",
             colors: int = 4, palette: list | None = None, smoothing: int = 3,
             min_patch: float = 1.0, keep_cavities: bool = False, up: str = "y",
-            rebuilding: str = "auto", detail: float = DETAIL) -> Printed:
+            rebuilding: str = "auto", detail: float = DETAIL, turn: int = 0) -> Printed:
     """GLB -> 3MF: `prepare`, `paint`, `write_3mf`. `rebuilding`: "auto" draws a new
     surface (see `rebuild`) only when cleaning the mesh did not leave a closed body,
     "always" and "never" say so."""
@@ -852,7 +874,7 @@ def convert(source: Path, target: Path, *, height: float = 80.0, base: float = 2
     if palette is None and not 1 <= colors <= MAX_COLORS:
         raise PrintError(f"--colors goes from 1 to {MAX_COLORS}")
     mesh, report = prepare(source, height=height, base=base, fit=fit, keep_cavities=keep_cavities, up=up,
-                           rebuilding=rebuilding, detail=detail)
+                           rebuilding=rebuilding, detail=detail, turn=turn)
     labels, swatches, share = paint(mesh, colors=colors, palette=palette, smoothing=smoothing,
                                     min_patch=min_patch)
     write_3mf(target, mesh, labels, swatches, Path(source).stem)

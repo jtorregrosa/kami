@@ -47,7 +47,7 @@ pod lifecycle, the in-pod cost guard, both providers and the cost reporting.
 
 ```powershell
 pip install -e .
-kami init      # creates kami.toml and .env here if missing
+kami init      # creates kami.toml (the profiles views, mesh, fronts-flux, trellis) and .env here if missing
 kami doctor    # checks config, API key, server image, model access, GPU stock
 ```
 
@@ -197,7 +197,8 @@ not match the front: look at them before making the mesh.
 - **Mesh**: the views go into slots named after the side they show (or one mesh per
   picture, or straight from text), with the options of the pod's mesh model, and the
   result opens in an interactive 3D viewer.
-- **Print**: `kami print` with a painted preview on the printer's plate. Size, flat base,
+- **Print**: `kami print` with a painted preview on the printer's plate. Size, which way it faces (the
+  mesh models do not agree on where a mesh's front is; kept for each mesh), flat base,
   how many filaments or the colours of your own; changing colours redraws at once. It
   runs on your PC, so it works with no pod.
 
@@ -287,6 +288,7 @@ billed.
 kami print kami-out\owl.glb                              # owl.3mf next to it: 80 mm long, 4 colours
 kami print owl.glb --size 60 --colors 2                  # smaller, two filaments
 kami print owl.glb --height 60                           # 60 mm tall, whatever its length
+kami print owl.glb --turn 90                             # turned 90° left, so its front faces you
 kami print owl.glb --palette "#1a4fa0,#ffffff,#202020"   # the filaments you have, in slot order
 ```
 
@@ -345,7 +347,7 @@ some MB.
 | `kami mesh --prompt TEXT` | Text → image → GLB (needs a profile with both models) |
 | `kami image PROMPT` | Text → PNG, with the printing hint (`-n`, `--seed`, `--steps`, `--guidance`, `--width`, `--height`, `--preset`, `--colors`, `--as-written`) |
 | `kami views CONCEPT` | Concept → front, left, back, right pictures of it, for `kami mesh` with views (`--front IMAGE`, `--angles`, `--seed`, `--steps`, `--guidance`, `--lora-scale`, `--elevation`, `--distance`, `--preset`, `--colors`, `--as-written`) |
-| `kami print MESH...` | GLB → 3MF to print in colours, on this PC: closed solid, flat base, mm, the texture as a few filaments (`--size`, `--height`, `--base`, `--colors`, `--palette`, `--rebuild`, `--detail`, `--smooth`, `--min-patch`, `--keep-cavities`, `-o`) |
+| `kami print MESH...` | GLB → 3MF to print in colours, on this PC: closed solid, flat base, mm, the texture as a few filaments (`--size`, `--height`, `--turn`, `--base`, `--colors`, `--palette`, `--rebuild`, `--detail`, `--smooth`, `--min-patch`, `--keep-cavities`, `-o`) |
 | `kami ui [FOLDER]` | Web page on this PC: Concept → Views → Mesh → Print, opening on what the pod serves; the library by object (`--port`, `--no-browser`) |
 | `kami jobs` | The pod's jobs, whoever sent them: stage and progress of the running one, the queue, the last ones (`--watch`, `--json`) |
 | `kami reload` | Send this kami's server code to the running pod and restart the server: no new pod, no download (`--force` with jobs running) |

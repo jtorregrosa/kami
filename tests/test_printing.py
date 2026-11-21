@@ -425,6 +425,40 @@ class PrintingTests(unittest.TestCase):
         self.assertEqual(self.run_cli("print", str(source), "--size", "30", "--base", "0")[0], 0)
         self.assertEqual(self.run_cli("print", str(source), "--height", "30", "--size", "30")[0], 2)   # one or the other
 
+    def test_turned_so_its_front_faces_the_plates_front(self):
+        mesh, _ = printing.solid(printing.load_glb(self.save(parts=[cube()])))
+        mesh.vertices[:, 0] *= 3                                   # 6 long along X
+        mesh.vertices[:, 2] += (mesh.vertices[:, 0] > 0) * 0.5     # a nose: its +X end leans to the front (+Z)
+        before = printing.place(mesh, 40, base=0, fit="longest")
+        left = printing.place(mesh, 40, base=0, fit="longest", turn=90)
+        self.assertTrue(np.allclose(np.ptp(left.vertices, axis=0)[[1, 0, 2]], np.ptp(before.vertices, axis=0)))
+        nose = before.vertices[:, 0].argmax()
+        self.assertTrue(np.allclose(left.vertices[nose, :2], [-before.vertices[nose, 1], before.vertices[nose, 0]]))
+        tri = left.vertices[left.faces]                            # turned, not mirrored
+        self.assertGreater(np.einsum("ij,ij->i", tri[:, 0], np.cross(tri[:, 1], tri[:, 2])).sum(), 0)
+        self.assertTrue(np.allclose(printing.turned(before, 90).vertices, left.vertices))
+        self.assertTrue(np.allclose(printing.turned(before, 0).vertices, before.vertices))
+        for turn in (45, -90, 360):
+            with self.assertRaises(printing.PrintError):
+                printing.place(mesh, 40, turn=turn)
+        # the page turns what it prepared, without preparing it again
+        from kami import webui
+        path = self.write("long.glb", glb([cube()]))
+        printer = webui.Printer(path.parent)
+        with unittest.mock.patch.object(printing, "prepare", wraps=printing.prepare) as prepare:
+            flat = printer.run({"file": "long.glb", "height": 30})["size"]
+            turned = printer.run({"file": "long.glb", "height": 30, "turn": 90})["size"]
+        self.assertEqual(prepare.call_count, 1)
+        self.assertEqual(turned, [flat[1], flat[0], flat[2]])
+        with self.assertRaises(ValueError):
+            printer.run({"file": "long.glb", "turn": 45})
+        before = os.getcwd()
+        self.addCleanup(os.chdir, before)
+        os.chdir(self.root)
+        source = self.save("lying.glb", parts=[cube()])
+        self.assertEqual(self.run_cli("print", str(source), "--turn", "270", "--base", "0")[0], 0)
+        self.assertEqual(self.run_cli("print", str(source), "--turn", "45")[0], 2)
+
     def test_warnings(self):
         report = printing.Solid(pieces=2, open_edges=4)
         done = printing.Printed(Path("x.3mf"), 10, (300.0, 20.0, 80.0), 1.0, report, [("#FFFFFF", 1.0)])

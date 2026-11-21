@@ -57,14 +57,62 @@ output_dir = "kami-out"
 max_hours = 4
 idle_minutes = 30
 
-# A profile = models + GPUs (tried in order until one has stock).
-# mesh_model: a TRELLIS.2 pipeline (image -> textured GLB).
-# image_model: any diffusers text-to-image pipeline.
+# A profile = models + GPUs (tried in order until one has stock). One pod at a time, one
+# per step of the way from a concept to a print (`kami ui` shows them as its stages;
+# Print runs on your PC):
+#
+#   kami up -p fronts-flux   a description -> pictures of the object's front (FLUX.2)
+#   kami up -p views         a picture of the front -> its sides (Qwen-Image-Edit)
+#   kami up -p mesh          those pictures -> a textured mesh (Pixal3D)
+#   kami up -p trellis       pictures drawn anywhere else -> a mesh (TRELLIS.2)
+#
+# Pixal3D and TRELLIS.2 load DINOv3 and RMBG-2.0, both gated: accept their terms on
+# Hugging Face with the account of HF_TOKEN (`kami doctor` checks it).
+
+# views: Qwen-Image-Edit-2511 with fal's Multiple-Angles LoRA turns the camera around a
+# picture of the front; Z-Image-Turbo can make that front too. An 80 GB card.
+[profiles.views]
+image_model = "Tongyi-MAI/Z-Image-Turbo"
+image_defaults = { steps = 8, guidance = 0.0, width = 1024, height = 1024 }
+views_model = "Qwen/Qwen-Image-Edit-2511"
+views_lora = "fal/Qwen-Image-Edit-2511-Multiple-Angles-LoRA/qwen-image-edit-2511-multiple-angles-lora.safetensors"
+views_defaults = { steps = 40, guidance = 4.0, lora_scale = 0.9 }
+offload = true
+gpus = ["A100 SXM 80GB", "A100 PCIe 80GB", "H100 PCIe", "H100 SXM", "H100 NVL"]
+min_vram_gb = 80
+min_ram_gb = 96          # both models wait in RAM between turns
+disk_gb = 140
+
+# mesh: Pixal3D, one picture or the posed views `kami views` makes. Its own image: the
+# container above with -pixal3d (docker/Dockerfile.pixal3d).
 [profiles.mesh]
+mesh_model = "TencentARC/Pixal3D"
+container = "ghcr.io/CHANGE-ME/kami-server:0.1.0-pixal3d"
+gpus = ["RTX 4090", "L40S", "RTX A6000", "L40", "A100 PCIe 80GB"]
+min_vram_gb = 24
+min_ram_gb = 64          # both pipelines in RAM
+disk_gb = 80
+mesh_defaults = { texture_size = 2048, decimation_target = 500000, remesh = true }
+
+# fronts-flux: FLUX.2 [dev] 4-bit (NON-COMMERCIAL licence) for the front picture: it keeps
+# the subject itself, facing the camera, in its own colours. ~1 min a picture.
+[profiles.fronts-flux]
+image_model = "diffusers/FLUX.2-dev-bnb-4bit"
+image_defaults = { steps = 28, guidance = 4.0, width = 1024, height = 1024 }
+gpus = ["L40S", "RTX A6000", "L40", "RTX 6000 Ada", "A100 PCIe 80GB"]
+min_vram_gb = 48
+min_ram_gb = 64
+disk_gb = 60
+
+# trellis: TRELLIS.2, one picture or several with no camera assumed for each, which
+# pictures drawn by hand or elsewhere need.
+[profiles.trellis]
 mesh_model = "microsoft/TRELLIS.2-4B"
-gpus = ["RTX 4090", "L40S", "RTX A6000"]
+gpus = ["RTX 4090", "L40S", "RTX A6000", "L40", "A100 PCIe 80GB"]
 min_vram_gb = 24
 min_ram_gb = 48          # host RAM per GPU: TRELLIS.2 keeps its models in RAM
+disk_gb = 60
+mesh_defaults = { texture_size = 2048, decimation_target = 500000, remesh = true }
 """
 
 STARTER_ENV = """\
@@ -72,7 +120,7 @@ STARTER_ENV = """\
 RUNPOD_API_KEY=
 # vast.ai API key (provider = "vast"): https://cloud.vast.ai/manage-keys/
 VAST_API_KEY=
-# Hugging Face token: TRELLIS.2 needs gated models (DINOv3, RMBG-2.0); accept their terms first
+# Hugging Face token: Pixal3D and TRELLIS.2 need gated models (DINOv3, RMBG-2.0); accept their terms first
 HF_TOKEN=
 """
 

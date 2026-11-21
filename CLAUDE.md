@@ -105,7 +105,9 @@ Your PC ── kami mesh photo.png ──HTTPS──► https://<pod>-8000.proxy
   from an older pod, the model's defaults) says it is read. The print preview has the
   256 mm plate under the model (`preview_glb(plate=)`), sized by its longest side unless
   told `fit="height"`; the viewer starts three-quarter from above, which is not always
-  the model's front (the mesh models do not agree on which way a mesh faces). Pictures of a job may be
+  the model's front (the mesh models do not agree on which way a mesh faces; `turn`, kept
+  per mesh in `kami.print`, spins the prepared mesh with `printing.turned` without
+  preparing it again). Pictures of a job may be
   uploads or `{file}` from the library. `Printer`: POST /api/print (`prepare` cached, so
   colours answer at once; `save` writes the 3MF), /preview/<id>.glb, /thumbs/<mesh> (a
   drawn PNG for meshes with no picture). The page builds its DOM from JSON with
@@ -211,10 +213,11 @@ pictures to a closed 3MF in three colours.
   pymeshlab for a missing library, since added; never run again), a Hunyuan3D-2mv mesh.
 - The guard deleting the pod through GraphQL (a pod-scoped key got 403 once).
 - A hollow skin with an opening wider than a cube in `rebuild` (only built in a test).
-- A model's front does not always face the plate's front (Pixal3D and TRELLIS.2 differ).
-- `kami init`'s template in config.py still writes one TRELLIS.2 profile called `mesh`;
-  the shipped `kami.toml` has `views`, `mesh` (Pixal3D, the default), `fronts-flux` and
-  `trellis`, with image, studio, studio-24, hunyuan, hunyuan-mv and views-flux commented.
+- A model's front does not always face the plate's front (Pixal3D and TRELLIS.2 differ):
+  `--turn` / the page's Turn (kept per mesh) fix it by hand; nothing guesses it.
+- The shipped `kami.toml` and `kami init`'s template (`STARTER_CONFIG`, a test keeps them
+  alike) have `views`, `mesh` (Pixal3D, the default), `fronts-flux` and `trellis`; the
+  shipped one also has image, studio, studio-24, hunyuan, hunyuan-mv and views-flux commented.
 
 ## Working notes
 

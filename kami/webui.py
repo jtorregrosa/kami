@@ -187,6 +187,9 @@ class Printer:
         geometry.setdefault("fit", "longest")      # the page measures the longest side
         finish = _params({k: request.get(k) for k in ("smoothing", "min_patch")},
                          {"smoothing": int, "min_patch": float})
+        turn = _params({"turn": request.get("turn")}, {"turn": int}).get("turn", 0)
+        if turn not in printing.TURNS:
+            raise ValueError("turn is 0, 90, 180 or 270 (degrees)")
         colors = request.get("colors")
         if colors is not None and (isinstance(colors, bool) or not isinstance(colors, int)):
             raise ValueError("colors must be a whole number")
@@ -205,6 +208,7 @@ class Printer:
                     keep_cavities=geometry.get("keep_cavities", False), fit=geometry["fit"])
                 self.key = key
             mesh, report = self.prepared
+            mesh = printing.turned(mesh, turn)           # quick: the prepared mesh is kept as it is
             labels, swatches, share = printing.paint(mesh, colors=colors or jobs.PRINT_COLORS,
                                                      palette=palette, **finish)
             saved = None

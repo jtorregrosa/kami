@@ -401,7 +401,7 @@ let meshMode = "views";      // views | each | text
 const slots = {};            // view -> {file} (library) or {name, data, url} (uploaded)
 const loose = [];            // pictures for "one mesh per picture"
 const PRINT_DEFAULTS = {height: 80, fit: "longest", base: 2, mode: "auto", colors: 4, palette: [], rebuild: "auto", detail: 0.3,
-                        smoothing: 3, minPatch: 1, keep: false};
+                        smoothing: 3, minPatch: 1, keep: false, turns: {}};   // turns: mesh file -> degrees
 const print = Object.assign({}, PRINT_DEFAULTS, store.get("print", {}),
                             {result: null, busy: false, dirty: false, error: "", forFile: null});
 function rememberPrint() {
@@ -851,6 +851,7 @@ const HELP = {
   remesh: "Rebuilds the model's raw surface into a cleaner one. Off keeps its own triangles.",
   height: "How big the print is, in millimetres, on the side chosen next to it. The other sides follow.",
   fit: "The longest side suits anything; the height, a standing figure that must be so tall. A creature lying down is long and low: 80 mm tall, a gecko came out 30 cm long.",
+  turn: "Turns the model on the plate, seen from above, so its front faces the front of the printer. The mesh models do not agree on which way a mesh faces. Kept for each mesh.",
   base: "The lowest part of the model, as a share of its height, is pressed flat so it stands on the plate. 0 leaves it as it is.",
   filaments: "The texture is reduced to this many colours, the most used in slot 1. Fewer print faster and waste less in purges.",
   rebuild: "Draws a new closed surface around everything the mesh encloses. Auto does it only when the mesh is open or a hollow skin.",
@@ -1302,14 +1303,18 @@ function meshStage(box) {
 }
 
 /* --- Print: GLB -> 3MF, on this PC --- */
+function turnOf(mesh) { return (mesh && (print.turns || {})[mesh.file]) || 0; }
 function printControls() {
   const form = el("form", {});
+  const turn = turnOf(meshOf(obj()));
   form.append(el("h3", {text: "A 3MF to print in colours"}),
     el("div", {class: "row"},
       field("Size (mm)", number("height", "", {min: "5", max: "400", step: "1", value: String(print.height)}), HELP.height),
       field("Measured on", el("select", {name: "fit"}, [["longest", "the longest side"], ["height", "the height"]]
         .map(([v, t]) => new Option(t, v, false, v === print.fit))), HELP.fit),
-      field("Flat base (%)", number("base", "", {min: "0", max: "40", step: "0.5", value: String(print.base)}), HELP.base)));
+      field("Flat base (%)", number("base", "", {min: "0", max: "40", step: "0.5", value: String(print.base)}), HELP.base),
+      field("Turn", el("select", {name: "turn"}, [[0, "as it came"], [90, "90° left"], [180, "180°"], [270, "90° right"]]
+        .map(([v, t]) => new Option(t, String(v), false, v === turn))), HELP.turn)));
   const auto = print.mode === "auto";
   form.append(el("div", {class: "seg", role: "group", "aria-label": "Colours"},
     el("button", {type: "button", "aria-pressed": String(auto), text: "Find the colours",
@@ -1360,6 +1365,12 @@ function printControls() {
   form.addEventListener("change", () => {
     print.height = num(form, "height") || print.height;
     print.fit = form.elements.fit.value;
+    const mesh = meshOf(obj());
+    if (mesh) {
+      print.turns = Object.assign({}, print.turns);
+      const deg = Number(form.elements.turn.value);
+      if (deg) print.turns[mesh.file] = deg; else delete print.turns[mesh.file];
+    }
     print.base = num(form, "base") ?? print.base;
     if (form.elements.colors) print.colors = num(form, "colors") || print.colors;
     print.rebuild = form.elements.rebuild.value;
@@ -1387,7 +1398,8 @@ async function runPrint(save) {
   stageKey = ""; renderStage();
   rememberPrint();
   const body = {file: mesh.file, height: print.height, fit: print.fit, base: print.base, rebuild: print.rebuild, detail: print.detail,
-                smoothing: print.smoothing, min_patch: print.minPatch, keep_cavities: print.keep, save};
+                smoothing: print.smoothing, min_patch: print.minPatch, keep_cavities: print.keep,
+                turn: turnOf(mesh), save};
   if (print.mode === "mine") body.palette = print.palette; else body.colors = print.colors;
   try {
     print.result = await post("api/print", body);
@@ -1462,7 +1474,8 @@ function renderControls() {
   const starting = st ? [st.profile, st.running, st.code, st.log.length, st.log[st.log.length - 1],
                          Math.floor((Date.now() / 1000 - st.since) / 60)].join("/") : "";
   const key = [starting, stage, ready(), can(stage), meshMode, hintText, presets.length, presetName, print.mode, print.palette.length, JSON.stringify(s),
-               stage === "views" ? (frontOf(obj()) || "") : "", pod && pod.pod ? pod.pod.profile : ""].join("|");
+               stage === "views" ? (frontOf(obj()) || "") : "", stage === "print" ? ((meshOf(obj()) || {}).file || "") : "",
+               pod && pod.pod ? pod.pod.profile : ""].join("|");
   if (key === controlsKey) return;
   controlsKey = key;
   const box = $("#controls");
