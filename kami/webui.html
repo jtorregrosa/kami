@@ -87,6 +87,38 @@ label.check { display: flex; align-items: center; gap: 7px; font-size: 14px; }
 .notice { font-size: 13px; color: var(--dim); min-height: 1.2em; }
 .notice.bad { color: var(--bad); }
 .blocked { display: grid; gap: 10px; }
+.podrow { display: flex; gap: 10px; align-items: center; justify-content: space-between; border: 1px solid var(--line);
+          border-radius: 10px; padding: 8px 10px; }
+.podrow small { display: block; color: var(--dim); font-size: 12px; overflow-wrap: anywhere; }
+.boot { font: 12px ui-monospace, "Cascadia Code", Consolas, monospace; background: var(--stage); border-radius: 8px;
+        padding: 8px 10px; margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 260px; overflow: auto; }
+dialog.confirm { border: 1px solid var(--line); border-radius: 14px; background: var(--panel); color: var(--text);
+                 padding: 18px; width: min(480px, calc(100vw - 32px)); }
+dialog.confirm::backdrop { background: rgba(0,0,0,.55); }
+dialog.confirm dl { display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; margin: 12px 0; font-size: 14px; }
+dialog.confirm dt { color: var(--dim); }
+dialog.confirm dd { margin: 0; }
+.jobchip { display: inline-flex; align-items: center; gap: 7px; }
+#jobs-section { position: fixed; top: 64px; right: max(16px, calc((100vw - 1320px) / 2 + 24px)); z-index: 15;
+                width: min(560px, calc(100vw - 32px)); max-height: 70vh; overflow: auto; margin: 0;
+                background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px;
+                box-shadow: 0 10px 40px rgba(0,0,0,.35); }
+#toasts { position: fixed; right: 16px; bottom: 16px; z-index: 25; display: grid; gap: 8px; width: min(380px, calc(100vw - 32px)); }
+.toast { display: flex; gap: 10px; align-items: center; background: var(--panel); border: 1px solid var(--line);
+         border-left: 4px solid var(--ok); border-radius: 10px; padding: 10px 12px; box-shadow: 0 6px 24px rgba(0,0,0,.3); }
+.toast.bad { border-left-color: var(--bad); }
+.toast span { flex: 1; font-size: 14px; overflow-wrap: anywhere; }
+.toast .x { border: 0; background: none; color: var(--dim); cursor: pointer; font-size: 16px; }
+.steps { display: flex; gap: 4px; flex-wrap: wrap; }
+.steps span { font-size: 11px; border: 1px solid var(--line); border-radius: 4px; padding: 0 5px; color: var(--dim); }
+.steps span.done { color: var(--ok); border-color: currentColor; }
+.frontpick { display: flex; gap: 12px; align-items: center; border: 1.5px dashed var(--line); border-radius: 10px;
+             padding: 10px; cursor: pointer; background: var(--stage); }
+.frontpick.over { border-color: var(--accent); }
+.frontpick img { width: 96px; height: 96px; object-fit: contain; border-radius: 8px; background: #fff; flex: none; }
+.frontpick .what { display: grid; gap: 3px; min-width: 0; }
+.frontpick .what small { color: var(--dim); font-size: 12px; overflow-wrap: anywhere; }
+.frontpick .empty { color: var(--dim); text-align: center; width: 100%; padding: 14px 0; }
 .extras { display: grid; gap: 8px; }
 .sent { display: block; white-space: pre-wrap; padding: 8px 10px; }
 .lab { display: flex; align-items: center; gap: 6px; }
@@ -239,6 +271,7 @@ section.block { margin: 22px 0; }
       <span class="chip" id="pod-profile" hidden></span>
       <span class="dim" id="pod-meta"></span>
     </div>
+    <button type="button" class="btn jobchip" id="jobchip" aria-expanded="false" aria-controls="jobs-section" hidden></button>
     <button type="button" class="btn danger" id="down" hidden>Delete pod</button>
   </div>
 </header>
@@ -256,8 +289,9 @@ section.block { margin: 22px 0; }
     <section class="panel stage" id="stage" aria-live="polite"></section>
   </div>
 
-  <section class="block" id="jobs-section" hidden>
-    <div class="head"><h2>Jobs</h2><span class="dim">on the pod: the running one, the queue, the last ones</span></div>
+  <section class="block" id="jobs-section" hidden aria-label="Jobs">
+    <div class="head"><h2>Jobs</h2><span class="dim">on the pod: the running one, the queue, the last ones</span>
+      <button type="button" class="btn small" id="jobs-close" style="margin-left:auto">Close</button></div>
     <ul class="jobs" id="jobs"></ul>
   </section>
 
@@ -267,6 +301,7 @@ section.block { margin: 22px 0; }
   </section>
 </main>
 
+<div id="toasts" aria-live="polite"></div>
 <script>
 "use strict";
 const TOKEN = document.querySelector('meta[name="kami-token"]').content;
@@ -401,7 +436,15 @@ function renderPod() {
   const p = pod && pod.pod;
   if (!pod) { mode.textContent = "Checking the pod…"; return; }
   if (pod.error && !p) { dot.classList.add("bad"); mode.textContent = "Cannot read the pod: " + pod.error; return; }
+  const st = pod.starting;
   if (!p) {
+    if (st && st.running) {
+      dot.classList.add("busy");
+      mode.textContent = "Starting " + st.profile + "\u2026";
+      meta.textContent = pod.waiting ? "waiting for a GPU with stock: nothing is billing yet" : "asking for a GPU";
+      down.hidden = false;
+      return;
+    }
     mode.textContent = pod.waiting ? "Waiting for GPU stock (kami up)" : "No pod";
     meta.textContent = pod.waiting ? "" : "nothing is billing";
     if (pod.waiting) dot.classList.add("busy");
@@ -489,28 +532,87 @@ function renderStages() {
 }
 $$(".stagetab").forEach(t => t.addEventListener("click", () => setStage(t.dataset.stage, true)));
 
-/* why a stage cannot make anything right now, and the way out */
+/* why a stage cannot make anything right now, and the way out: start or switch to a pod
+   that can, after its price is shown, or the same from a terminal */
 function blocked(name) {
-  const p = pod && pod.pod, what = {mesh: "meshes", views: "views", concept: "pictures from text"}[name];
+  const p = pod && pod.pod, st = pod && pod.starting;
+  const what = {mesh: "meshes", views: "views", concept: "pictures from text"}[name];
   const box = el("div", {class: "blocked"});
-  const fitting = ((pod && pod.profiles) || []).filter(x => x[name]).map(x => x.name);
+  if (st && st.running) return booting(box, st);
   if (p && !pod.ready) {
-    box.append(el("p", {class: "dim", text: "The pod is starting. This unlocks when it is ready."}), command("kami status"));
+    box.append(el("p", {class: "dim", text: "The pod is starting. This unlocks when it is ready."}));
+    if (st) box.append(el("pre", {class: "boot", text: st.log.join("\n")}));
+    else box.append(command("kami status"));
     return box;
   }
-  if (p) {
-    box.append(el("p", {text: "The active pod (" + (p.profile || "pod") + ") does not make " + what + "."}),
-               el("p", {class: "dim", text: "One pod at a time: delete it, then start one that does. In a terminal:"}));
-    fitting.slice(0, 4).forEach(n => box.append(command("kami down; kami up -p " + n)));
-  } else {
-    box.append(el("p", {text: "No pod is running, so nothing is billing."}),
-               el("p", {class: "dim", text: "This page never starts one. To make " + what + ", in a terminal:"}));
-    fitting.slice(0, 4).forEach(n => box.append(command("kami up -p " + n)));
+  const fitting = ((pod && pod.profiles) || []).filter(x => x[name]);
+  box.append(el("p", {text: p ? "The active pod (" + (p.profile || "pod") + ") does not make " + what + "."
+                               : "No pod is running, so nothing is billing."}));
+  if (st && !st.running && st.code) {
+    box.append(el("p", {class: "notice bad", text: st.profile + " did not start (kami up ended with " + st.code + "):"}),
+               el("pre", {class: "boot", text: st.log.join("\n")}));
   }
-  if (!fitting.length) box.append(command(name === "mesh" ? "kami up -p mesh" : "kami up -p views"));
+  if (fitting.length) {
+    box.append(el("p", {class: "dim", text: p ? "Switch to a pod that does (the active one is deleted first):"
+                                              : "Start a pod that makes " + what + ":"}));
+    fitting.slice(0, 4).forEach(x => box.append(el("div", {class: "podrow"},
+      el("div", {}, el("b", {text: x.name}), el("small", {text: x.models || ""})),
+      el("button", {type: "button", class: "btn primary small", text: p ? "Switch" : "Start", onclick: e => askStart(x.name, e.target)}))));
+    const terminal = el("details", {}, el("summary", {class: "dim", text: "Or in a terminal"}));
+    fitting.slice(0, 4).forEach(x => terminal.append(command((p ? "kami down; " : "") + "kami up -p " + x.name)));
+    box.append(terminal);
+  } else box.append(command(name === "mesh" ? "kami up -p mesh" : "kami up -p views"));
   if (name === "views" && !p) box.append(el("p", {class: "dim", text: "A picture of the front of your own needs no Concept pod: only this one, to turn it."}));
   box.append(el("p", {class: "dim", text: "The library below and the Print stage work without a pod."}));
   return box;
+}
+function booting(box, st) {
+  const since = Math.max(0, Math.round(Date.now() / 1000 - st.since));
+  box.append(el("p", {}, el("span", {class: "spin", style: "display:inline-block;margin-right:8px"}),
+                "Starting " + st.profile + " \u00b7 " + minutes(since)),
+             el("pre", {class: "boot", text: st.log.length ? st.log.join("\n") : "kami up is starting\u2026"}),
+             el("p", {class: "dim", text: "It bills from the moment it has a GPU. This stage opens by itself when it is ready."}),
+             el("button", {type: "button", class: "btn danger small", text: "Stop and delete it", onclick: async e => {
+               e.target.disabled = true;
+               try { await post("api/down", {}); } catch (err) { e.target.textContent = err.message; }
+               refresh();
+             }}));
+  return box;
+}
+// The price first, then a yes: the only way the page spends money.
+async function askStart(name, button) {
+  const label = button.textContent;
+  button.disabled = true;
+  button.textContent = "Pricing\u2026";
+  let q;
+  try { q = await post("api/quote", {profile: name}); }
+  catch (e) { button.textContent = e.message; setTimeout(() => { button.textContent = label; button.disabled = false; }, 4000); return; }
+  button.textContent = label;
+  button.disabled = false;
+  const rows = [
+    ["Models", q.models || "?"],
+    ["GPU", q.gpu ? q.gpu + " \u00b7 " + money(q.hourly) + "/h" : "none in stock now: it waits for one, billing nothing while it waits"],
+    ["Boot", (q.boot_seconds ? "about " + minutes(q.boot_seconds) : "several minutes") + ", billed"
+             + (q.download_gb ? " (" + q.download_gb + " GB of weights)" : "")],
+    ["Guard", "deletes it after " + q.max_hours + " h, or " + q.idle_minutes + " min without jobs"],
+  ];
+  if (q.replaces) rows.push(["First", "deletes the active pod, " + q.replaces + (q.replaces_cost != null ? " (\u2248 " + money(q.replaces_cost) + " so far)" : "")]);
+  const dialog = el("dialog", {class: "confirm", "aria-label": "Start " + name});
+  const go = el("button", {type: "button", class: "btn primary", text: (q.replaces ? "Delete " + q.replaces + " and start " : "Start ") + name});
+  dialog.append(el("h2", {text: "Start " + name + "?"}),
+    el("dl", {}, rows.map(([k, v]) => [el("dt", {text: k}), el("dd", {text: v})])),
+    el("div", {class: "actions", style: "justify-content:flex-end"},
+       el("button", {type: "button", class: "btn", text: "Cancel", onclick: () => dialog.close()}), go));
+  dialog.addEventListener("close", () => dialog.remove());
+  go.addEventListener("click", async () => {
+    go.disabled = true;
+    go.textContent = "Starting\u2026";
+    try { await post("api/switch", {profile: name, confirm: true}); dialog.close(); picked = false; }
+    catch (e) { go.textContent = e.message; return; }
+    controlsKey = ""; refresh();
+  });
+  document.body.append(dialog);
+  dialog.showModal();
 }
 
 /* --- pictures: reading, slots --- */
@@ -890,19 +992,18 @@ function viewsControls() {
   const s = served(), vd = s.views_defaults || {}, o = obj(), front = frontOf(o);
   const form = el("form", {});
   form.append(el("h3", {text: "Its sides, from a picture of the front"}));
-  // a picture of yours, from anywhere (dropped, pasted or chosen), or the one on the stage
-  const zone = el("div", {class: "drop", role: "button", tabindex: "0"});
-  const staged = front ? el("div", {}, el("div", {class: "dim", style: "margin-bottom:6px", text: "None given: the picture on the stage is used"}),
-    el("div", {class: "strip"}, el("img", {src: fileUrl(front), alt: "The picture on the stage"}))) : null;
-  const back = el("button", {type: "button", class: "btn small", text: "Use the picture on the stage instead",
-                             onclick: () => takeFront(null)});
+  // one place for the front: yours (dropped, pasted or chosen) or else the stage's
+  const zone = el("div", {class: "frontpick", role: "button", tabindex: "0", "aria-label": "Picture of the front"});
   const paint = () => {
     zone.innerHTML = "";
-    if (ownFront) zone.append(el("div", {class: "strip", style: "justify-content:center;margin-bottom:6px"},
-                                 el("img", {src: ownFront.url, alt: ownFront.name})), ownFront.name + " · drop, paste or click to change it");
-    else zone.append("Drop a picture of the front here, paste it, or click to choose");
-    if (staged) staged.hidden = !!ownFront;
-    back.hidden = !(ownFront && front);
+    const chosen = ownFront ? {url: ownFront.url, name: ownFront.name, from: "your picture"}
+      : front ? {url: fileUrl(front), name: front.split("/").pop(), from: "the picture on the stage"} : null;
+    if (!chosen) { zone.append(el("div", {class: "empty", text: "Drop a picture of the front here, paste it, or click to choose"})); return; }
+    zone.append(el("img", {src: chosen.url, alt: chosen.name}), el("div", {class: "what"},
+      el("b", {text: "Front: " + chosen.from}), el("small", {text: chosen.name}),
+      el("small", {text: "Drop, paste or click for another"}),
+      ownFront && front ? el("button", {type: "button", class: "btn small", text: "Use the stage's",
+                                        onclick: e => { e.stopPropagation(); takeFront(null); }}) : null));
   };
   takeFront = pic => {
     if (ownFront) URL.revokeObjectURL(ownFront.url);
@@ -917,8 +1018,8 @@ function viewsControls() {
     e.preventDefault(); zone.classList.remove("over");
     if (e.dataTransfer.files[0]) { try { takeFront(await readPicture(e.dataTransfer.files[0])); } catch (err) {} }
   });
-  form.append(el("p", {class: "dim", text: "The whole object, centred, on a plain background. Its sides are made from it, "
-    + "so what it shows is what you get."}), zone, back, staged);
+  form.append(zone, el("p", {class: "dim", text: "The whole object, centred, on a plain background, the camera at its height: "
+    + "its sides are made from it, so what it shows is what you get."}));
   const angles = (s.view_angles && s.view_angles.length ? s.view_angles : VIEW_ORDER).filter(a => a !== "front");
   const usual = concept.angles || vd.views || ["left", "back", "right"];
   form.append(el("div", {}, el("div", {class: "dim", text: "Turn the camera to"}),
@@ -1267,7 +1368,11 @@ function printStage(box) {
 /* --- rendering --- */
 function renderControls() {
   const s = served();
-  const key = [stage, ready(), can(stage), meshMode, hintText, presets.length, presetName, print.mode, print.palette.length, JSON.stringify(s),
+  // a pod the page is starting: its log, and the minutes shown, change the blocked stage
+  const st = pod && pod.starting;
+  const starting = st ? [st.profile, st.running, st.code, st.log.length, st.log[st.log.length - 1],
+                         Math.floor((Date.now() / 1000 - st.since) / 60)].join("/") : "";
+  const key = [starting, stage, ready(), can(stage), meshMode, hintText, presets.length, presetName, print.mode, print.palette.length, JSON.stringify(s),
                stage === "views" ? (frontOf(obj()) || "") : "", pod && pod.pod ? pod.pod.profile : ""].join("|");
   if (key === controlsKey) return;
   controlsKey = key;
@@ -1322,12 +1427,13 @@ function renderLibrary() {
       face.append(drawn);
     } else face.append("3MF");
     card.append(face,
-      el("div", {class: "cap"}, el("span", {class: "name", text: o.name}), el("div", {class: "badges"},
-        views ? el("span", {class: "badge plain", text: views + (views > 1 ? " views" : " view")}) : null,
-        !views && o.images.length ? el("span", {class: "badge plain", text: "picture"}) : null,
-        o.meshes.length ? el("span", {class: "badge", text: "mesh"}) : null,
-        o.prints.length ? el("span", {class: "badge", text: "3MF"}) : null,
-        o.folder ? el("span", {class: "badge plain", text: o.folder}) : null)));
+      el("div", {class: "cap"}, el("span", {class: "name", text: o.name}),
+        // where the object is on its way to a print, a stage each
+        el("div", {class: "steps", "aria-label": STAGES.filter(n => doneFor(o, n)).join(", ") || "nothing yet"},
+          [["concept", "front"], ["views", views > 1 ? (views - 1) + (views > 2 ? " sides" : " side") : "sides"],
+           ["mesh", "mesh"], ["print", "3MF"]].map(([n, t]) =>
+            el("span", {class: doneFor(o, n) ? "done" : "", text: (doneFor(o, n) ? "\u2713 " : "") + t}))),
+        o.folder ? el("small", {class: "dim", text: o.folder}) : null));
     card.addEventListener("click", () => select(o.key, true));
     box.append(card);
   }
@@ -1393,7 +1499,16 @@ function objectOfFile(file) {
                            o.meshes.some(m => m.file === file) || o.prints.some(p => p.file === file));
 }
 function renderJobs(list) {
-  $("#jobs-section").hidden = !list.length;
+  const chip = $("#jobchip"), running = list.filter(j => !["done", "error"].includes(j.status));
+  chip.hidden = !list.length;
+  if (!list.length) $("#jobs-section").hidden = true;
+  chip.innerHTML = "";
+  const busy = running.find(j => j.status === "running") || running[0];
+  if (busy) {
+    const pct = typeof busy.progress === "number" ? " \u00b7 " + Math.round(busy.progress * 100) + "%" : "";
+    chip.append(el("span", {class: "spin"}), running.length + (running.length > 1 ? " jobs" : " job") + pct);
+  } else chip.append("Jobs");
+  chip.title = busy ? busy.label : "The last jobs";
   const ul = $("#jobs");
   ul.innerHTML = "";
   for (const j of list) {
@@ -1429,19 +1544,32 @@ function renderJobs(list) {
   }
 }
 function followJobs(list) {
-  // what this page asked for goes on the stage when it arrives
   for (const j of list) {
-    if (j.external || j.status !== "done" || doneJobs.has(j.id) || !(j.files || []).length) continue;
+    if (j.external || doneJobs.has(j.id)) continue;
+    if (j.status === "error") { doneJobs.add(j.id); toast(j.label + " failed: " + (j.error || "see the jobs"), true); continue; }
+    if (j.status !== "done" || !(j.files || []).length) continue;
     const o = objectOfFile(j.files.find(f => /\.glb$/i.test(f)) || j.files[0]);
     if (!o) continue;                 // the library has not caught up yet: next round
     doneJobs.add(j.id);
-    if ($("#stage").classList.contains("full")) continue;
-    current = o.key;
-    fillSlots(o);
-    if (j.kind === "views") { if (stage === "concept") stage = "views"; }
-    else if (meshOf(o) && j.kind !== "image" && (stage === "concept" || stage === "views")) stage = "mesh";
-    render();
+    const where = j.kind === "views" ? "views" : j.kind === "image" ? "concept" : "mesh";
+    toast(j.label + " is ready", false, ["Show", () => { select(o.key, false); setStage(where, true); }]);
   }
+}
+
+$("#jobchip").addEventListener("click", () => {
+  const box = $("#jobs-section");
+  box.hidden = !box.hidden;
+  $("#jobchip").setAttribute("aria-expanded", String(!box.hidden));
+});
+$("#jobs-close").addEventListener("click", () => { $("#jobs-section").hidden = true; $("#jobchip").setAttribute("aria-expanded", "false"); });
+
+/* A finished job says so, and waits to be looked at: the page does not move under you. */
+function toast(text, bad, action) {
+  const box = el("div", {class: "toast" + (bad ? " bad" : ""), role: "status"}, el("span", {text}),
+    action ? el("button", {type: "button", class: "btn small", text: action[0], onclick: () => { action[1](); box.remove(); }}) : null,
+    el("button", {type: "button", class: "x", "aria-label": "Dismiss", text: "×", onclick: () => box.remove()}));
+  $("#toasts").append(box);
+  setTimeout(() => box.remove(), 20000);
 }
 
 /* --- polling --- */

@@ -2,10 +2,15 @@
 
 The page has four stages, Concept (text -> pictures of an object's front), Views (a
 picture of the front -> its sides), Mesh (views -> GLB) and Print (GLB -> 3MF, on this
-PC), and opens on the first one the active pod serves. A small HTTP server on 127.0.0.1 serves the page, the files of the output folder
-(the library, grouped by object), and a JSON API the page uses: the pod's state, the jobs
-sent from the page, and the actions (send jobs, prepare a print, delete the pod). kami relays jobs to the pod itself, so the pod's API key
-never reaches the browser. It never brings a pod up: that stays a deliberate `kami up`.
+PC), and opens on the first one the active pod serves. A small HTTP server on 127.0.0.1
+serves the page, the files of the output folder (the library, grouped by object), and a
+JSON API the page uses: the pod's state, the jobs sent from the page, and the actions
+(send jobs, prepare a print, quote and start a pod, delete the pod). kami relays jobs to
+the pod itself, so the pod's API key never reaches the browser.
+
+A pod is started from the page only when asked there, after its price, boot time and
+guard were shown and confirmed (POST /api/switch with confirm: true): one pod at a time,
+so the active one is deleted first. It runs `kami up` in a process of its own.
 
 Only this PC can reach it (127.0.0.1, and the Host header is checked against DNS
 rebinding). Requests that act (POST) also need the page's own token and a same-origin
@@ -669,6 +674,21 @@ def make_handler(folder: Path, port_ref: list, token: str, work: Work, status: P
                     return self._json(400, {"error": str(e)})
                 except (ConfigError, OSError) as e:
                     return self._json(409, {"error": str(e).splitlines()[0] if str(e) else type(e).__name__})
+            if path == "/api/quote":
+                try:
+                    return self._json(200, backend.quote(str(request.get("profile") or "")))
+                except (ConfigError, OSError) as e:
+                    return self._json(409, {"error": str(e).splitlines()[0]})
+            if path == "/api/switch":
+                # money: only with the page's explicit yes, after it showed the quote
+                if request.get("confirm") is not True:
+                    return self._json(400, {"error": "Starting a pod needs confirm: true"})
+                try:
+                    result = backend.switch(str(request.get("profile") or ""))
+                except (ConfigError, OSError) as e:
+                    return self._json(409, {"error": str(e).splitlines()[0]})
+                status.get(fresh=True)
+                return self._json(202, result)
             if path == "/api/down":
                 try:
                     result = backend.down()

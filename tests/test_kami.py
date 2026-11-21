@@ -1947,6 +1947,24 @@ class WebUI(unittest.TestCase):
         self.backend.down.side_effect = ConfigError("No pod is registered")
         self.assertEqual(self.act("/api/down", {})[0], 409)
 
+    def test_a_pod_is_started_only_with_a_yes(self):
+        self.start()
+        self.backend.quote.return_value = {"profile": "mesh", "gpu": "RTX 4090", "hourly": 0.9}
+        status, _, body = self.act("/api/quote", {"profile": "mesh"})
+        self.assertEqual((status, json.loads(body)["hourly"]), (200, 0.9))
+        self.backend.quote.assert_called_once_with("mesh")
+        self.backend.switch.return_value = {"starting": "mesh", "deleted": None}
+        for request in ({"profile": "mesh"}, {"profile": "mesh", "confirm": "yes"}, {"profile": "mesh", "confirm": 1}):
+            self.assertEqual(self.act("/api/switch", request)[0], 400, request)
+        self.backend.switch.assert_not_called()
+        status, _, body = self.act("/api/switch", {"profile": "mesh", "confirm": True})
+        self.assertEqual((status, json.loads(body)["starting"]), (202, "mesh"))
+        self.backend.switch.assert_called_once_with("mesh")
+        # another site cannot start one either
+        self.assertEqual(self.act("/api/switch", {"profile": "mesh", "confirm": True}, **{"X-Kami-Token": "nope"})[0], 403)
+        self.backend.switch.side_effect = ConfigError("Unknown profile 'x'")
+        self.assertEqual(self.act("/api/switch", {"profile": "x", "confirm": True})[0], 409)
+
     def test_cli_wires_the_command(self):
         with mock.patch.object(webui, "serve", return_value=None) as serve, \
                 mock.patch.object(cli, "load_config", return_value=mock.Mock(output_dir=str(self.folder))), \
@@ -3296,4 +3314,65 @@ class PageFixes(unittest.TestCase):
                 mock.patch.object(jobs, "info", return_value={"image_model": "m", "image_negative": False}):
             served = cli.WebBackend(config.load_config()).status()["served"]
         self.assertIs(served["image_negative"], False)
+
+
+class StartingFromThePage(unittest.TestCase):
+    """kami ui's backend quotes a profile and runs `kami up` for it, deleting the pod first."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.state_dir = Path(tmp.name)
+        patcher = mock.patch.object(config.project, "state_dir", self.state_dir)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.backend = cli.WebBackend(config.load_config(config.SOURCE_ROOT / "kami.toml"))
+
+    def test_the_quote_is_the_first_gpu_in_stock(self):
+        quotes = {"mesh": [cli.Quote("RTX 4090"), cli.Quote("L40S", stock="High", gpu_h=1.05, disk_h=0.01)]}
+        with mock.patch.object(cli, "runpod_quotes", return_value=quotes), mock.patch.object(cli, "client"), \
+                mock.patch.object(cli.fit, "download_gb", return_value=48.14), \
+                mock.patch.object(cli, "typical_boot", return_value=(512.4, 3)), \
+                mock.patch.object(cli, "load_state", return_value={"pod_id": "p1", "profile": "views"}), \
+                mock.patch.object(cli, "estimated_cost", return_value=0.374):
+            q = self.backend.quote("mesh")
+        self.assertEqual((q["gpu"], q["hourly"], q["stock"], q["download_gb"], q["boot_seconds"]),
+                         ("L40S", 1.06, "High", 48.1, 512))
+        self.assertEqual((q["replaces"], q["replaces_cost"]), ("views", 0.37))
+        self.assertEqual(q["max_hours"], self.backend.cfg.max_hours)
+        with self.assertRaisesRegex(ConfigError, "Unknown profile"):
+            self.backend.quote("nope")
+
+    def test_switch_deletes_the_pod_then_runs_kami_up(self):
+        process = mock.Mock()
+        process.poll.return_value = None
+        with mock.patch.object(cli, "load_state", return_value={"pod_id": "p1"}), \
+                mock.patch.object(self.backend, "down", return_value={"pod_id": "p1"}) as down, \
+                mock.patch.object(cli.subprocess, "Popen", return_value=process) as popen:
+            result = self.backend.switch("mesh")
+        down.assert_called_once()
+        self.assertEqual(result, {"starting": "mesh", "deleted": {"pod_id": "p1"}})
+        args = popen.call_args[0][0]
+        self.assertEqual(args[1:3], ["-m", "kami"])
+        self.assertEqual(args[-3:], ["up", "-p", "mesh"])
+        self.assertEqual(popen.call_args[1]["stdin"], cli.subprocess.DEVNULL)      # never waits on a prompt
+        (self.state_dir / "ui-up.log").write_text("> Waiting for RunPod\n\n> Pulling the image\n", encoding="utf-8")
+        st = self.backend.starting_status()
+        self.assertEqual((st["profile"], st["running"], st["log"]), ("mesh", True, ["> Waiting for RunPod", "> Pulling the image"]))
+        with self.assertRaisesRegex(ConfigError, "already starting"):
+            self.backend.switch("trellis")
+        with self.assertRaisesRegex(ConfigError, "Unknown profile"):
+            self.backend.switch("nope")
+
+    def test_deleting_stops_a_start_still_under_way(self):
+        process = mock.Mock()
+        process.poll.return_value = None
+        self.backend.starting = {"profile": "mesh", "since": 0, "process": process, "log": self.state_dir / "x.log"}
+        with mock.patch.object(cli, "load_state", return_value={}):
+            self.assertEqual(self.backend.down()["stopped"], True)
+        process.terminate.assert_called_once()
+        process.poll.return_value = 0
+        with mock.patch.object(cli, "load_state", return_value={}):
+            with self.assertRaisesRegex(ConfigError, "No pod"):
+                self.backend.down()
 

@@ -1949,9 +1949,10 @@ class WebBackend:
         # which stage of the page each profile serves: pictures from text, the camera turned, meshes
         profiles = [{"name": name, "concept": bool(p.image_model or (p.views_model and
                                                     config.views_family(p.views_model) == "flux2")),
-                     "views": bool(p.views_model), "mesh": bool(p.mesh_model)}
+                     "views": bool(p.views_model), "mesh": bool(p.mesh_model), "models": p.model}
                     for name, p in self.cfg.profiles.items()]
         return {"pod": pod, "ready": info["ready"], "waiting": info["waiting"], "profiles": profiles,
+                "starting": self.starting_status(),
                 "served": served and {k: served.get(k) for k in
                                       ("mesh_model", "image_model", "mesh_defaults", "image_defaults",
                                        "mesh_backend", "max_views", "view_names", "multiview_modes",
@@ -1969,13 +1970,91 @@ class WebBackend:
         return jobs.listing(*self.target())
 
     def down(self) -> dict:
+        """Delete the pod; a `kami up` the page started is stopped first (waiting for stock,
+        or booting: its pod, once registered, goes with it)."""
+        stopped = self._stop_starting()
         state = load_state()
         if not state.get("pod_id"):
+            if stopped:
+                return {"pod_id": None, "session_cost_estimate": None, "stopped": True}
             raise ConfigError("No pod is registered")
         estimate = estimated_cost(state)
         pod_id = terminate(client(pod_provider(state)), state)
         return {"pod_id": pod_id,
                 "session_cost_estimate": round(estimate, 2) if estimate is not None else None}
+
+    # --- starting a pod from the page (asked for there, with its price shown first) ---
+
+    starting: dict | None = None             # {"profile", "since", "process", "log"}
+
+    def quote(self, name: str) -> dict:
+        """What `kami up -p name` would rent now: its first GPU in stock and its price, the
+        weights to download, how long its boots took here, and the guard it gets."""
+        profile = self.cfg.profile(name)
+        provider = self.cfg.provider
+        quotes = (vast_quotes if provider == "vast" else runpod_quotes)(
+            client(provider), self.cfg, [profile], self.cfg.cloud)[profile.name]
+        picked = next((q for q in quotes if q.stock), None)
+        try:
+            gb = 0.0 if provider == "runpod" and self.cfg.storage == "volume" else fit.download_gb(profile)
+        except LookupError:
+            gb = None
+        state = load_state()
+        boot = typical_boot(state, profile.name, provider, self.cfg.storage)
+        estimate = estimated_cost(state) if state.get("pod_id") else None
+        return {"profile": profile.name, "models": profile.model,
+                "gpu": catalog.key(picked.gpu) if picked else None,
+                "hourly": round(picked.hourly, 3) if picked else None,
+                "stock": picked.stock if picked else None,
+                "download_gb": round(gb, 1) if gb is not None else None,
+                "boot_seconds": round(boot[0]) if boot else None,
+                "max_hours": self.cfg.max_hours, "idle_minutes": self.cfg.idle_minutes,
+                "replaces": state.get("profile") if state.get("pod_id") else None,
+                "replaces_cost": round(estimate, 2) if estimate is not None else None}
+
+    def switch(self, name: str) -> dict:
+        """Delete the active pod, if any, and run `kami up -p name` in a process of its own,
+        as from a terminal: the same stock waiting, guard and checks. Its output is kept in
+        .kami/ui-up.log for the page to show."""
+        self.cfg.profile(name)                       # an unknown profile is refused here
+        if self.starting and self.starting["process"].poll() is None:
+            raise ConfigError(f"Pod {self.starting['profile']} is already starting")
+        deleted = self.down() if load_state().get("pod_id") else None
+        config.project.state_dir.mkdir(exist_ok=True)
+        log = config.project.state_dir / "ui-up.log"
+        env = dict(os.environ, NO_COLOR="1", PYTHONIOENCODING="utf-8", PYTHONUNBUFFERED="1")
+        with log.open("w", encoding="utf-8") as out:
+            process = subprocess.Popen(
+                [sys.executable, "-m", "kami", "--config", str(config.project.config), "up", "-p", name],
+                cwd=str(config.project.root), stdout=out, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+                env=env)
+        self.starting = {"profile": name, "since": time.time(), "process": process, "log": log}
+        return {"starting": name, "deleted": deleted}
+
+    def starting_status(self) -> dict | None:
+        """The `kami up` the page started: its profile, whether it still runs, how it ended,
+        and the last lines it printed."""
+        if not self.starting:
+            return None
+        code = self.starting["process"].poll()
+        try:
+            lines = self.starting["log"].read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            lines = []
+        lines = [ln.rstrip() for ln in lines if ln.strip()][-14:]
+        return {"profile": self.starting["profile"], "since": self.starting["since"],
+                "running": code is None, "code": code, "log": lines}
+
+    def _stop_starting(self) -> bool:
+        process = self.starting and self.starting["process"]
+        if not process or process.poll() is not None:
+            return False
+        process.terminate()
+        try:
+            process.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            process.kill()
+        return True
 
 
 def cmd_ui(args, cfg: Config) -> None:
@@ -1991,7 +2070,8 @@ def cmd_ui(args, cfg: Config) -> None:
     def ready(url):
         ui.ok(f"kami ui · {folder} · {len(found)} object(s), {meshes} with a mesh")
         ui.step(f"{ui.bold(url)} {ui.dim('(only this PC can open it)')}")
-        ui.hint("It sends jobs to the pod `kami up` started; it never starts one itself.")
+        ui.hint("It sends jobs to the active pod, and can switch pods when you ask it to, "
+                "with the price shown first.")
         ui.hint("Ctrl+C stops the page (the pod, if any, keeps running: `kami down`).")
         sys.stdout.flush()                   # the URL must show now, even when piped
 

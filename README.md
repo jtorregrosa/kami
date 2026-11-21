@@ -197,14 +197,23 @@ not match the front: look at them before making the mesh.
 - **Mesh**: the views go into slots named after the side they show (or one mesh per
   picture, or straight from text), with the options of the pod's mesh model, and the
   result opens in an interactive 3D viewer.
-- **Print**: `kami print` with a painted preview. Height, flat base, how many filaments or
-  the colours of your own; changing colours redraws at once. It runs on your PC, so it
-  works with no pod.
+- **Print**: `kami print` with a painted preview on the printer's plate. Size, flat base,
+  how many filaments or the colours of your own; changing colours redraws at once. It
+  runs on your PC, so it works with no pod.
 
 The page opens on the first stage the active pod serves (a `views` pod on Concept, a
 `mesh` pod on Mesh, no pod on Print), and the header says what the pod is, what it
 costs, how much it has cost and when the guard deletes it. A stage the pod does not
-serve says which `kami up -p ...` gets you there; the page never starts a pod itself.
+serve lists the profiles that do, each with a **Start** (or **Switch**) button: it shows
+the GPU it would rent and its price per hour, how long its boots take, the weights to
+download, the guard, and the pod it deletes first (one pod at a time), and starts it
+only on your yes. It runs `kami up -p ...` as from a terminal (the same stock waiting and
+guard), and its progress shows in the stage; "Stop and delete it" stops it. The same
+commands are there for a terminal.
+
+The jobs on the pod sit behind a button in the header ("1 job · 48%"). When one of yours
+finishes, a notice says so with a **Show** button; the page does not move under you. Each
+object in the library shows how far it has got: front, sides, mesh, 3MF.
 Each stage keeps its form short and has a **Settings** button (the gear beside its
 title) that opens a dialog with the rest, in sections, every setting with an (i) that
 explains it. Concept's has the texts kami adds to your description (the printing hint and

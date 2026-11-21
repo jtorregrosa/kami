@@ -89,8 +89,14 @@ Your PC ── kami mesh photo.png ──HTTPS──► https://<pod>-8000.proxy
   picture, from the stage or dropped / pasted, -> its sides; views jobs), Mesh (views in
   named slots -> GLB) and Print (`printing` on this PC, painted preview), opening on the
   first stage the pod's `/v1/info` says it serves. kami relays the jobs (the pod key stays in kami);
-  the page never starts a pod, and a stage the pod lacks shows the `kami up -p` for it
-  (`WebBackend.status()["profiles"]`). `objects()` is the library: `output_dir` and one
+  a stage the pod lacks lists the profiles that serve it (`WebBackend.status()["profiles"]`)
+  with Start / Switch: POST /api/quote (`WebBackend.quote`: first GPU in stock, $/h,
+  boot time from history, download, guard, the pod it replaces) shown in a confirm
+  dialog, then POST /api/switch with `confirm: true` (`switch`: `down`, then `kami up -p`
+  in a subprocess with stdin closed, output in .kami/ui-up.log, shown by
+  `starting_status`); `down` stops a start still under way. The page spends money only
+  there. Jobs live in a header chip and popover; a finished job raises a toast with
+  "Show" instead of moving the page. `objects()` is the library: `output_dir` and one
   folder deep, grouped by name (`VIEW_OF`: owl-left-2.png is the newest left view of
   "owl"), leaving out names that start with `_` or `.` (`kami-out/_sheets/` holds the
   comparison sheets); `resolve()` is the only way a name becomes a file. The stage tabs
