@@ -30,6 +30,7 @@ import json
 import os
 import re
 import secrets
+import shutil
 import threading
 import time
 import webbrowser
@@ -137,6 +138,74 @@ def objects(folder: Path) -> list[dict]:
             obj["meshes" if suffix in MESH_SUFFIXES else "prints"].append(
                 {"file": rel, "size": stat.st_size})
     return sorted(found.values(), key=lambda o: (o["mtime"], o["key"]), reverse=True)
+
+
+# --- pictures made in Gemini (by hand), as they land in Downloads ---
+
+# what gemini.google.com names a picture it downloads; "(1)" when the browser kept two
+GEMINI_NAME = re.compile(r"^Gemini_Generated_Image_[A-Za-z0-9]+(?: \(\d+\))?\.(?:png|jpe?g|webp)$", re.I)
+GEMINI_LISTED = 40               # newest pictures listed (the page shows the new ones first)
+
+
+def default_downloads() -> Path:
+    return Path.home() / "Downloads"
+
+
+class Gemini:
+    """The pictures Gemini saved in the Downloads folder, for the page to take into the
+    library under an object's name and a view (`owl-left.png`). Only files with Gemini's
+    own names are listed or read; nothing there is moved or deleted."""
+
+    def __init__(self, downloads: Path | None, started: float | None = None):
+        self.downloads = downloads
+        self.started = time.time() if started is None else started
+
+    def listing(self) -> dict:
+        found = []
+        if self.downloads is not None and self.downloads.is_dir():
+            for p in self.downloads.iterdir():
+                if GEMINI_NAME.match(p.name) and p.is_file():
+                    stat = p.stat()
+                    found.append({"name": p.name, "mtime": stat.st_mtime, "size": stat.st_size,
+                                  "new": stat.st_mtime >= self.started})
+        found.sort(key=lambda x: (x["mtime"], x["name"]), reverse=True)
+        return {"folder": str(self.downloads) if self.downloads else None,
+                "watching": bool(self.downloads and self.downloads.is_dir()),
+                "since": self.started, "pictures": found[:GEMINI_LISTED]}
+
+    def file(self, name) -> Path | None:
+        if self.downloads is None or not isinstance(name, str) or not GEMINI_NAME.match(name):
+            return None
+        target = self.downloads / name
+        return target if target.is_file() else None
+
+    def take(self, request: dict, folder: Path) -> dict:
+        """Copy one into the library: {"name": the Gemini file, "object": "owl" or
+        "gemini/owl" (a folder already in the library), "view": "left" or "" (a picture
+        that is no view)}. A later take of the same view is owl-left-2.png, the newest."""
+        if not isinstance(request, dict):
+            raise ValueError("The request must be a JSON object")
+        source = self.file(request.get("name"))
+        if source is None:
+            raise ValueError("That picture is not in Downloads any more")
+        view = request.get("view") or ""
+        if view and view not in jobs.VIEW_ANGLES:
+            raise ValueError(f"view is one of {', '.join(jobs.VIEW_ANGLES)}")
+        wanted = request.get("object")
+        if not isinstance(wanted, str) or not wanted.strip() or "\\" in wanted:
+            raise ValueError("Give the object a name")
+        sub, _, name = wanted.strip().rpartition("/")
+        name = jobs.views_name(name) if view else jobs.safe_name(name)
+        place = folder
+        if sub:
+            place = folder / sub
+            if "/" in sub or sub.startswith((".", "_")) or sub in ("..",) or not place.is_dir():
+                raise ValueError(f"No folder {sub} in the library")
+        folder.mkdir(parents=True, exist_ok=True)
+        target = jobs.free_path(place / f"{f'{name}-{view}' if view else name}{source.suffix.lower()}")
+        shutil.copyfile(source, target)              # a fresh time: the newest take of its view
+        return {"file": target.relative_to(folder).as_posix(),
+                "object": f"{sub}/{name}" if sub else name}
 
 
 # --- printing (on this PC) ---
@@ -570,9 +639,10 @@ def page(folder: Path, token: str) -> str:
 # --- the server ---
 
 def make_handler(folder: Path, port_ref: list, token: str, work: Work, status: PodStatus,
-                 backend):
+                 backend, gemini: Gemini | None = None):
     pod_jobs = PodJobs(backend)
     printer = Printer(folder)
+    gemini = gemini or Gemini(None)
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *args):          # quiet: the terminal shows kami's own lines
@@ -628,9 +698,18 @@ def make_handler(folder: Path, port_ref: list, token: str, work: Work, status: P
                                         "print_presets": [{"name": name, "label": label, "about": about, "text": text, "front": front,
                                                            "negative": jobs.preset_negative(name)}
                                                           for name, (label, about, text, front) in jobs.PRINT_PRESETS.items()],
-                                        "print_colors": jobs.PRINT_COLORS})
+                                        "print_colors": jobs.PRINT_COLORS,
+                                        "gemini": {"front": jobs.GEMINI_FRONT,
+                                                   "views": {v: jobs.gemini_view(v) for v in jobs.GEMINI_VIEWS}}})
             if path == "/api/objects":
                 return self._json(200, {"signature": signature(folder), "objects": objects(folder)})
+            if path == "/api/gemini":
+                return self._json(200, gemini.listing())
+            if path.startswith("/gemini/"):
+                # only Gemini's own pictures in Downloads: no other file there
+                source = gemini.file(path[len("/gemini/"):])
+                if source is not None:
+                    return self._send(200, source.read_bytes(), TYPES.get(source.suffix.lower(), "image/png"))
             if path.startswith("/thumbs/"):
                 picture = printer.thumbnail(path[len("/thumbs/"):])
                 if picture:
@@ -678,6 +757,13 @@ def make_handler(folder: Path, port_ref: list, token: str, work: Work, status: P
                     return self._json(400, {"error": str(e)})
                 except (ConfigError, OSError) as e:
                     return self._json(409, {"error": str(e).splitlines()[0] if str(e) else type(e).__name__})
+            if path == "/api/gemini":
+                try:
+                    return self._json(200, gemini.take(request, folder))
+                except ValueError as e:
+                    return self._json(400, {"error": str(e)})
+                except OSError as e:
+                    return self._json(409, {"error": str(e)})
             if path == "/api/quote":
                 try:
                     return self._json(200, backend.quote(str(request.get("profile") or "")))
@@ -705,17 +791,20 @@ def make_handler(folder: Path, port_ref: list, token: str, work: Work, status: P
     return Handler
 
 
-def serve(folder: Path, backend, port: int = 0, open_browser: bool = True, on_ready=None):
+def serve(folder: Path, backend, port: int = 0, open_browser: bool = True, on_ready=None,
+          downloads: Path | None = None):
     """Serve the page for `folder` on 127.0.0.1 until Ctrl+C. `port` 0 picks a free one.
     `backend` has status() -> dict, target() -> (url, api key), down() -> dict and
-    jobs() -> the pod's job listing or None.
+    jobs() -> the pod's job listing or None. `downloads`: where Gemini's pictures land
+    (default: the user's Downloads folder).
     `on_ready(url)` runs once it listens."""
     port_ref = [port]
     token = secrets.token_urlsafe(24)
     work = Work(backend, folder)
     status = PodStatus(backend)
+    gemini = Gemini(downloads or default_downloads())
     server = ThreadingHTTPServer(("127.0.0.1", port),
-                                 make_handler(folder, port_ref, token, work, status, backend))
+                                 make_handler(folder, port_ref, token, work, status, backend, gemini))
     server.daemon_threads = True
     port_ref[0] = server.server_address[1]
     url = f"http://127.0.0.1:{port_ref[0]}/"

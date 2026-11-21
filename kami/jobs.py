@@ -327,6 +327,32 @@ def printable(prompt: str, hint: str, colors: int | None = None) -> str:
     return f"{prompt}, {hint.replace('{colors}', str(colors or PRINT_COLORS))}"
 
 
+# Asking Gemini (gemini.google.com, by hand, on one's own account) for the pictures: what
+# `kami ui` copies to paste there. Its fronts kept each subject itself where the pod's
+# models did not (2026-11-20); asked in the same conversation, its sides stay the same
+# object. Ground level and sharp focus, since a mesh model reads a blurred tail as missing.
+GEMINI_FRONT = ("Everything in sharp focus from end to end, no depth-of-field blur. "
+                "Square image, 1:1.")
+GEMINI_SAME = ("Same object, same colours, same size in frame, same white background and "
+               "lighting. Camera at ground level, at the height of the object. Everything in "
+               "sharp focus from end to end, no depth-of-field blur. Square image, 1:1.")
+GEMINI_VIEWS = {
+    "front": "Show the exact same figurine from the front again, facing the camera.",
+    "left": "Show the exact same figurine from its left side, in profile.",
+    "back": "Show the exact same figurine from behind.",
+    "right": "Show the exact same figurine from its right side, in profile.",
+    "front-left": "Show the exact same figurine three-quarters from the front, between its front and its left side.",
+    "front-right": "Show the exact same figurine three-quarters from the front, between its front and its right side.",
+    "back-left": "Show the exact same figurine three-quarters from behind, between its back and its left side.",
+    "back-right": "Show the exact same figurine three-quarters from behind, between its back and its right side.",
+}
+
+
+def gemini_view(view: str) -> str:
+    """What to ask Gemini, in the conversation that made the front, for one more side."""
+    return f"{GEMINI_VIEWS[view]} {GEMINI_SAME}"
+
+
 def free_path(path: Path) -> Path:
     """`path`, or the first `stem-N.suffix` next to it that does not exist yet."""
     if not path.exists():

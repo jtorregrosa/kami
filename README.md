@@ -237,6 +237,23 @@ touching its files (the browser remembers which), and Hidden shows those to brin
 In Print, the colours found are listed as swatches in slot order, and "Use these as my
 filaments" turns them into a palette of your own to adjust.
 
+**With Gemini.** The best fronts so far were drawn by hand in Gemini
+(gemini.google.com), on your own account. The page helps with that, with no pod:
+
+- Concept's **Copy for Gemini** copies your description as kami would send it (with
+  the kind of print's words), plus what keeps the whole object sharp and square.
+- Views, for the object on the stage, has a **Copy prompt** for each side (left, back,
+  right, the diagonals), to ask in the same Gemini conversation: the same object, from
+  that side, at ground level, in focus.
+- What you download there lands in Downloads as `Gemini_Generated_Image_*.png`, and
+  shows up under **From Gemini**, above the library, with the object and the view it
+  was asked for already filled in. **Add** copies it into the library
+  (`gecko-left.png`); the file in Downloads stays where it is, and × puts one aside.
+  Older ones are a click away. `kami ui --downloads DIR` if your browser saves elsewhere.
+
+kami only reads files with Gemini's names in that folder, and never sends anything to
+Gemini: you paste the prompt there yourself.
+
 The page is served on 127.0.0.1 only, and only that page can act: other sites cannot
 send jobs or delete the pod. kami relays the jobs, so the pod's key never reaches the
 browser. The 3D viewer ([model-viewer](https://modelviewer.dev)) loads from a CDN.
@@ -348,7 +365,7 @@ some MB.
 | `kami image PROMPT` | Text → PNG, with the printing hint (`-n`, `--seed`, `--steps`, `--guidance`, `--width`, `--height`, `--preset`, `--colors`, `--as-written`) |
 | `kami views CONCEPT` | Concept → front, left, back, right pictures of it, for `kami mesh` with views (`--front IMAGE`, `--angles`, `--seed`, `--steps`, `--guidance`, `--lora-scale`, `--elevation`, `--distance`, `--preset`, `--colors`, `--as-written`) |
 | `kami print MESH...` | GLB → 3MF to print in colours, on this PC: closed solid, flat base, mm, the texture as a few filaments (`--size`, `--height`, `--turn`, `--base`, `--colors`, `--palette`, `--rebuild`, `--detail`, `--smooth`, `--min-patch`, `--keep-cavities`, `-o`) |
-| `kami ui [FOLDER]` | Web page on this PC: Concept → Views → Mesh → Print, opening on what the pod serves; the library by object (`--port`, `--no-browser`) |
+| `kami ui [FOLDER]` | Web page on this PC: Concept → Views → Mesh → Print, opening on what the pod serves; the library by object; Gemini's downloads taken in (`--port`, `--no-browser`, `--downloads`) |
 | `kami jobs` | The pod's jobs, whoever sent them: stage and progress of the running one, the queue, the last ones (`--watch`, `--json`) |
 | `kami reload` | Send this kami's server code to the running pod and restart the server: no new pod, no download (`--force` with jobs running) |
 | `kami status` | Pod state, cost so far, guard, jobs done (`--json`; exit 0 ready, 2 not ready, 3 no pod) |

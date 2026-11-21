@@ -3386,3 +3386,112 @@ class StartingFromThePage(unittest.TestCase):
             with self.assertRaisesRegex(ConfigError, "No pod"):
                 self.backend.down()
 
+
+class FromGemini(unittest.TestCase):
+    """kami ui takes the pictures Gemini saved in Downloads into the library, and copies
+    what to ask Gemini for."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        self.downloads, self.folder = root / "Downloads", root / "kami-out"
+        self.downloads.mkdir()
+        (self.folder / "gemini").mkdir(parents=True)
+        for name in ("Gemini_Generated_Image_abc123abc123abc1.png", "Gemini_Generated_Image_def (1).jpg",
+                     "holiday.png", "Gemini_Generated_Image_x.txt", "notes.txt"):
+            (self.downloads / name).write_bytes(b"\x89PNG picture")
+        old = self.downloads / "Gemini_Generated_Image_old000old000old0.png"
+        old.write_bytes(b"old")
+        os.utime(old, (1000, 1000))
+        self.gemini = webui.Gemini(self.downloads, started=2000)
+
+    def test_only_geminis_pictures_are_listed_newest_first(self):
+        listed = self.gemini.listing()
+        names = [p["name"] for p in listed["pictures"]]
+        self.assertEqual(set(names), {"Gemini_Generated_Image_abc123abc123abc1.png", "Gemini_Generated_Image_def (1).jpg",
+                                      "Gemini_Generated_Image_old000old000old0.png"})
+        self.assertEqual(names[-1], "Gemini_Generated_Image_old000old000old0.png")
+        self.assertEqual([p["new"] for p in listed["pictures"]], [True, True, False])
+        self.assertTrue(listed["watching"])
+        for name in ("holiday.png", "../kami-out/x.png", "Gemini_Generated_Image_x.txt", "Gemini_Generated_Image_a/b.png", None):
+            self.assertIsNone(self.gemini.file(name), name)
+        self.assertEqual(webui.Gemini(self.downloads / "nope").listing()["pictures"], [])
+
+    def test_taken_under_an_objects_name_and_view(self):
+        name = "Gemini_Generated_Image_abc123abc123abc1.png"
+        first = self.gemini.take({"name": name, "object": "Gecko Toy", "view": "left"}, self.folder)
+        self.assertEqual(first, {"file": "gecko-toy-left.png", "object": "gecko-toy"})
+        again = self.gemini.take({"name": name, "object": "gecko-toy", "view": "left"}, self.folder)
+        self.assertEqual(again["file"], "gecko-toy-left-2.png")          # a later take: the newest
+        front = self.gemini.take({"name": "Gemini_Generated_Image_def (1).jpg", "object": "gemini/owl-front", "view": "front"},
+                                 self.folder)
+        self.assertEqual(front, {"file": "gemini/owl-front.jpg", "object": "gemini/owl"})
+        self.assertTrue((self.downloads / name).exists())                # Downloads is left as it was
+        found = {o["key"]: o for o in webui.objects(self.folder)}
+        self.assertEqual(found["gecko-toy"]["views"]["left"], "gecko-toy-left-2.png")
+        self.assertEqual(found["gemini/owl"]["views"], {"front": "gemini/owl-front.jpg"})
+        for bad in ({"name": "holiday.png", "object": "x", "view": "left"},
+                    {"name": name, "object": "x", "view": "top"},
+                    {"name": name, "object": " ", "view": ""},
+                    {"name": name, "object": "../x", "view": ""},
+                    {"name": name, "object": "nofolder/x", "view": ""},
+                    {"name": name, "object": "_sheets/x", "view": ""},
+                    {"name": name, "object": "a\\b", "view": ""}):
+            with self.assertRaises(ValueError, msg=bad):
+                self.gemini.take(bad, self.folder)
+
+    def test_the_page_lists_shows_and_takes_them(self):
+        import http.client
+        import threading
+        from http.server import ThreadingHTTPServer
+        backend = mock.Mock()
+        backend.status.return_value = {"pod": None, "ready": False, "waiting": None}
+        backend.jobs.return_value = None
+        port = [0]
+        server = ThreadingHTTPServer(("127.0.0.1", 0), webui.make_handler(
+            self.folder, port, "tok", webui.Work(backend, self.folder), webui.PodStatus(backend, ttl=0), backend, self.gemini))
+        port[0] = server.server_address[1]
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+
+        def call(method, path, body=None, token="tok"):
+            conn = http.client.HTTPConnection("127.0.0.1", port[0], timeout=5)
+            headers = {"Host": f"127.0.0.1:{port[0]}"}
+            if body is not None:
+                headers.update({"Content-Type": "application/json", "X-Kami-Token": token,
+                                "Origin": f"http://127.0.0.1:{port[0]}"})
+            conn.request(method, path, body=json.dumps(body).encode() if body is not None else None, headers=headers)
+            r = conn.getresponse()
+            out = r.status, r.read()
+            conn.close()
+            return out
+
+        status, body = call("GET", "/api/gemini")
+        self.assertEqual((status, len(json.loads(body)["pictures"])), (200, 3))
+        self.assertEqual(call("GET", "/gemini/Gemini_Generated_Image_abc123abc123abc1.png"), (200, b"\x89PNG picture"))
+        self.assertEqual(call("GET", "/gemini/holiday.png")[0], 404)
+        self.assertEqual(call("GET", "/gemini/..%2Fkami-out%2Fgemini")[0], 404)
+        state = json.loads(call("GET", "/api/state")[1])["gemini"]
+        self.assertIn("left side", state["views"]["left"])
+        self.assertIn("Square image", state["front"])
+        take = {"name": "Gemini_Generated_Image_abc123abc123abc1.png", "object": "owl", "view": "back"}
+        self.assertEqual(call("POST", "/api/gemini", take, token="nope")[0], 403)
+        status, body = call("POST", "/api/gemini", take)
+        self.assertEqual((status, json.loads(body)["file"]), (200, "owl-back.png"))
+        self.assertEqual(call("POST", "/api/gemini", dict(take, view="up"))[0], 400)
+
+    def test_what_to_ask_gemini(self):
+        self.assertEqual(set(jobs.GEMINI_VIEWS), set(jobs.VIEW_ANGLES))
+        for view in jobs.VIEW_ANGLES:
+            self.assertTrue(jobs.gemini_view(view).endswith(jobs.GEMINI_SAME))
+        self.assertIn("ground level", jobs.GEMINI_SAME)
+        self.assertIn("no depth-of-field blur", jobs.GEMINI_SAME)
+
+    def test_kami_ui_takes_the_downloads_folder(self):
+        with mock.patch.object(webui, "serve", return_value=None) as serve, \
+                mock.patch.object(cli, "load_config", return_value=mock.Mock(output_dir=str(self.folder))), \
+                mock.patch.object(cli, "_pod_registered", return_value=False):
+            cli.main(["ui", "--no-browser", "--downloads", str(self.downloads)])
+        self.assertEqual(serve.call_args.kwargs["downloads"], self.downloads)

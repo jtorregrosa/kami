@@ -120,7 +120,13 @@ Your PC ── kami mesh photo.png ──HTTPS──► https://<pod>-8000.proxy
   The page keeps them in localStorage (`kami.concept`, `kami.print`), with the library's
   search bar state (`kami.library`) and the hidden cards (`kami.hidden`; hiding never
   touches a file). The header shows the pod's cost so far and the guard's time left
-  (`#pod-cost`, `#pod-life`). Host header checked; POSTs need the page's
+  (`#pod-cost`, `#pod-life`). Gemini by hand (no API, the user's own account): Concept's
+  "Copy for Gemini" (`sentPrompt` + `jobs.GEMINI_FRONT`) and Views' "Copy prompt" per side
+  (`jobs.gemini_view`, served in /api/state) work with no pod; `webui.Gemini` lists only
+  `GEMINI_NAME` files in Downloads (`--downloads`), GET /api/gemini, /gemini/<name>, and
+  POST /api/gemini copies one into the library as `<object>-<view>` (Downloads untouched).
+  The tray "From Gemini" fills in the object and view last asked for (`kami.geminiAsk`).
+  Host header checked; POSTs need the page's
   token, JSON and same Origin. `cli.WebBackend` gives it the pod status, target, `down`.
 - `kami/watchdog.py`, `kami/ui.py`, `kami/mascot.py` — local guard, console output, mascot.
 - `docker/Dockerfile.pixal3d` — Pixal3D + NAF (pinned) + natten 0.17.5 wheel on top of the base.

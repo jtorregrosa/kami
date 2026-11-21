@@ -270,6 +270,22 @@ section.block { margin: 22px 0; }
              background: rgba(0,0,0,.6); color: #fff; cursor: pointer; opacity: 0; }
 .obj:hover .hide, .obj:focus-within .hide, .obj .hide:focus-visible { opacity: 1; }
 .obj.hidden-obj { opacity: .55; }
+a.btn { text-decoration: none; display: inline-flex; align-items: center; color: var(--text); }
+/* pictures made in Gemini, as they land in Downloads */
+.tray { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); }
+.gem { border: 1px solid var(--line); background: var(--panel); border-radius: 12px; overflow: hidden; position: relative; }
+.gem.new { border-color: var(--accent); }
+.gem img { width: 100%; aspect-ratio: 1; object-fit: contain; display: block; background: #fff; cursor: zoom-in; }
+.gem .cap { padding: 8px 10px 10px; display: grid; gap: 6px; }
+.gem .two { display: flex; gap: 6px; }
+.gem .two > * { flex: 1; min-width: 0; }
+.gem input, .gem select { padding: 5px 8px; border-radius: 8px; border: 1px solid var(--line); background: var(--field); width: 100%; }
+.gem .x { position: absolute; top: 6px; right: 6px; border: 0; border-radius: 6px; padding: 0 8px; font-size: 16px;
+          background: rgba(0,0,0,.55); color: #fff; cursor: pointer; }
+.asks { display: grid; gap: 6px; }
+.ask { display: flex; gap: 8px; align-items: center; }
+.ask b { flex: 1; font-weight: 500; }
+.ask .tick { color: var(--ok); font-style: normal; }
 .actionsrow { display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; }
 .actionsrow label.field { width: 84px; }
 .colours { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 8px; }
@@ -329,6 +345,13 @@ input.changed { border-color: var(--accent); }
     <div class="head"><h2>Jobs</h2><span class="dim">on the pod: the running one, the queue, the last ones</span>
       <button type="button" class="btn small" id="jobs-close" style="margin-left:auto">Close</button></div>
     <ul class="jobs" id="jobs"></ul>
+  </section>
+
+  <section class="block" id="gemini-section" hidden aria-label="From Gemini">
+    <div class="head"><h2>From Gemini</h2><span class="dim" id="gemini-note"></span>
+      <button type="button" class="btn small" id="gemini-older" style="margin-left:auto">Older ones</button>
+      <button type="button" class="btn small" id="gemini-close">Close</button></div>
+    <div class="tray" id="gemini"></div>
   </section>
 
   <section class="block">
@@ -582,7 +605,7 @@ function renderStages() {
     tab.tabIndex = name === stage ? 0 : -1;
     tab.classList.toggle("here", here);
     $("span", tab).textContent = name === "print" ? "on this PC, no pod"
-      : here ? "on this pod" : ready() ? "needs another pod" : "needs a pod";
+      : here ? "on this pod" : name !== "mesh" ? "in Gemini, or a pod" : ready() ? "needs another pod" : "needs a pod";
     let tick = $(".tick", tab);
     if (done && !tick) $("b", tab).append(tick = el("i", {class: "tick", "aria-hidden": "true", text: "\u2713"}));
     if (!done && tick) tick.remove();
@@ -1019,6 +1042,18 @@ function conceptControls() {
                                  text: images ? "Straight to views" : "Make views",
                                  title: images ? "The first front, turned at once: no choosing" : "The front and its sides in one go"}));
   }
+  // or in Gemini, on your own account: the same prompt to paste there, and what it saves
+  // in Downloads comes back under From Gemini
+  actions.append(el("button", {type: "button", class: "btn" + (images || views ? "" : " primary"), text: "Copy for Gemini",
+    title: "The prompt as kami would send it, for gemini.google.com: what you download there shows up below",
+    onclick: e => {
+      const typed = prompt.value.trim();
+      if (!typed) return fail(form, "Describe the object first");
+      askGemini(sentPrompt(form) + ". " + geminiText.front, slug(typed), "front", e.target);
+      const notice = $("[data-notice]", form);
+      notice.className = "notice";
+      notice.textContent = "Copied. Paste it in Gemini and download the picture: it shows up below, under From Gemini.";
+    }}), openGemini());
   form.append(actions, el("div", {class: "notice", "data-notice": ""}));
   withSettings(form, dialog);
   added.show();
@@ -1132,6 +1167,7 @@ function viewsControls() {
                          distance: form.elements.distance.value.trim()}});
   });
   paint();
+  form.append(el("details", {style: "margin-top:14px"}, el("summary", {class: "dim", text: "Or made in Gemini"}), geminiViews(o)));
   return form;
 }
 function redoView(o, view, button) {
@@ -1161,7 +1197,8 @@ function viewsStage(box) {
   if (!names.length) o.images.slice(0, 1).forEach(file => tiles.append(pictureTile(file, "front, not turned yet")));
   box.append(tiles);
   if (names.length < 2) {
-    box.append(el("p", {class: "dim", text: "Only its front so far. Make views turns the camera around it."}));
+    box.append(el("p", {class: "dim", text: can("views") ? "Only its front so far. Make views turns the camera around it."
+                                                          : "Only its front so far: ask Gemini for its sides, on the left."}));
     return;
   }
   box.append(el("p", {class: "dim", text:
@@ -1474,13 +1511,21 @@ function renderControls() {
   const starting = st ? [st.profile, st.running, st.code, st.log.length, st.log[st.log.length - 1],
                          Math.floor((Date.now() / 1000 - st.since) / 60)].join("/") : "";
   const key = [starting, stage, ready(), can(stage), meshMode, hintText, presets.length, presetName, print.mode, print.palette.length, JSON.stringify(s),
-               stage === "views" ? (frontOf(obj()) || "") : "", stage === "print" ? ((meshOf(obj()) || {}).file || "") : "",
+               stage === "views" ? (frontOf(obj()) || "") + Object.keys((obj() || {views: {}}).views).join(",") : "", stage === "print" ? ((meshOf(obj()) || {}).file || "") : "",
                pod && pod.pod ? pod.pod.profile : ""].join("|");
   if (key === controlsKey) return;
   controlsKey = key;
   const box = $("#controls");
   box.innerHTML = "";
   if (stage === "print") box.append(printControls());
+  else if (!can(stage) && stage === "views") box.append(viewsWithoutPod());
+  else if (!can(stage) && stage === "concept") {
+    // a front can be made in Gemini with no pod: the form, then the pods that make them here
+    box.append(conceptControls());
+    const other = el("details", {style: "margin-top:14px"}, el("summary", {class: "dim", text: "Or made on a pod"}), blocked("concept"));
+    if (pod && pod.starting && pod.starting.running) other.open = true;
+    box.append(other);
+  }
   else if (!can(stage)) box.append(blocked(stage));
   else box.append(stage === "mesh" ? meshControls() : stage === "views" ? viewsControls() : conceptControls());
   if (stage !== "views") takeFront = null;
@@ -1709,6 +1754,126 @@ for (const [id, key, read] of [["#lib-find", "find", e => e.value], ["#lib-show"
 }
 lib.find = "";
 
+/* --- Gemini, by hand on your own account: kami copies what to ask, and takes what it
+   saves in Downloads into the library under the object's name and view --- */
+const GEMINI_URL = "https://gemini.google.com/app";
+let geminiText = {front: "", views: {}};             // what to paste there, from kami (jobs.GEMINI_*)
+let geminiAsk = store.get("geminiAsk", null);        // the last thing asked for: {object, view, at}
+let geminiDone = new Set(store.get("geminiDone", []));   // pictures taken or put aside
+let gemini = {watching: false, pictures: []}, geminiOlder = false, geminiClosed = false, geminiKey = "";
+function slug(text) {                                // as jobs.safe_name: 'A red robot!' -> 'a-red-robot'
+  return text.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim().split(/\s+/).join("-").slice(0, 48).replace(/-+$/, "");
+}
+function askGemini(text, object, view, button) {
+  geminiAsk = {object, view, at: Date.now() / 1000};
+  store.set("geminiAsk", geminiAsk);
+  geminiClosed = false;
+  const label = button.textContent;
+  navigator.clipboard.writeText(text).then(() => { button.textContent = "Copied"; },
+                                           () => { button.textContent = "Copy failed"; });
+  setTimeout(() => { button.textContent = label; }, 1500);
+  renderGemini(true);
+}
+const openGemini = () => el("a", {class: "btn small", href: GEMINI_URL, target: "_blank", rel: "noopener noreferrer", text: "Open Gemini"});
+// the sides of the object on the stage, each with what to ask for it
+function geminiViews(o) {
+  const box = el("div", {class: "asks"});
+  if (!o || !frontOf(o)) {
+    box.append(el("p", {class: "dim", text: "Pick an object with a front in the library, or make its front in Concept."}));
+    return box;
+  }
+  box.append(el("p", {class: "dim", text: "In the Gemini conversation that made this front, ask for each side. "
+    + "What you download comes back under From Gemini, below, to put in its place."}));
+  const row = v => el("div", {class: "ask"}, el("b", {}, v + " ", o.views[v] ? el("i", {class: "tick", text: "✓", title: "It has one"}) : null),
+    el("button", {type: "button", class: "btn small", text: "Copy prompt", title: geminiText.views[v] || "",
+                  onclick: e => askGemini(geminiText.views[v], o.key, v, e.target)}));
+  ["left", "back", "right"].forEach(v => box.append(row(v)));
+  const more = el("details", {}, el("summary", {class: "dim", text: "Diagonals and the front again"}));
+  ["front-left", "front-right", "back-left", "back-right", "front"].forEach(v => more.append(row(v)));
+  box.append(more, el("div", {class: "ask"}, openGemini(),
+    el("button", {type: "button", class: "btn small", text: "Older from Gemini", onclick: () => { geminiOlder = true; geminiClosed = false; renderGemini(true); }})));
+  return box;
+}
+function viewsWithoutPod() {
+  const o = obj(), box = el("div", {});
+  box.append(el("h3", {text: "Its sides, made in Gemini"}), geminiViews(o));
+  const other = el("details", {style: "margin-top:14px"}, el("summary", {class: "dim", text: "Or turned on a views pod"}), blocked("views"));
+  if (pod && pod.starting && pod.starting.running) other.open = true;
+  box.append(other);
+  return box;
+}
+async function refreshGemini() {
+  try {
+    const r = await fetch("api/gemini", {cache: "no-store"});
+    if (r.ok) {
+      const before = new Set(gemini.pictures.map(p => p.name));
+      gemini = await r.json();
+      if (gemini.pictures.some(p => p.new && !before.has(p.name) && !geminiDone.has(p.name))) geminiClosed = false;
+      renderGemini();
+    }
+  } catch (e) {}
+}
+// where a picture goes unless told: what was asked for just before it was saved, or the
+// next side the object on the stage lacks
+function geminiTarget(p) {
+  if (geminiAsk && p.mtime >= geminiAsk.at - 5) return {object: geminiAsk.object, view: geminiAsk.view};
+  const o = obj();
+  if (!o) return {object: "", view: "front"};
+  return {object: o.key, view: ["front", "left", "back", "right"].find(v => !o.views[v]) || ""};
+}
+function renderGemini(force) {
+  const shown = gemini.pictures.filter(p => !geminiDone.has(p.name) && (p.new || geminiOlder));
+  const key = [shown.map(p => p.name).join(","), geminiOlder, geminiClosed, geminiAsk ? geminiAsk.at : 0, objects.length].join("|");
+  if (key === geminiKey && !force) return;
+  geminiKey = key;
+  const box = $("#gemini"), section = $("#gemini-section");
+  const asked = geminiAsk && Date.now() / 1000 - geminiAsk.at < 3600;
+  section.hidden = !gemini.watching || geminiClosed || !(shown.length || geminiOlder || asked);
+  $("#gemini-older").textContent = geminiOlder ? "New ones only" : "Older ones";
+  $("#gemini-note").textContent = gemini.folder ? "what Gemini saved in " + gemini.folder : "";
+  box.innerHTML = "";
+  if (!shown.length) {
+    box.append(el("p", {class: "dim", text: asked ? "Waiting for Gemini: download the picture there and it shows here."
+                                                  : "Nothing from Gemini" + (geminiOlder ? "." : " since kami ui started.")}));
+    return;
+  }
+  const names = el("datalist", {id: "gemini-objects"}, objects.map(o => new Option(o.key)));
+  box.append(names);
+  for (const p of shown) {
+    const to = geminiTarget(p);
+    const name = el("input", {type: "text", value: to.object, placeholder: "object name", list: "gemini-objects", "aria-label": "Object"});
+    const view = el("select", {"aria-label": "View"}, [["", "a picture"]].concat(VIEW_ORDER.map(v => [v, v]))
+      .map(([v, t]) => new Option(t, v, false, v === to.view)));
+    const add = el("button", {type: "button", class: "btn primary small", text: "Add"});
+    const note = el("small", {class: "dim"});
+    add.addEventListener("click", async () => {
+      if (!name.value.trim()) { note.textContent = "Give it the object's name"; name.focus(); return; }
+      add.disabled = true;
+      try {
+        const r = await post("api/gemini", {name: p.name, object: name.value.trim(), view: view.value});
+        geminiDone.add(p.name);
+        store.set("geminiDone", [...geminiDone].slice(-200));
+        await refreshObjects(true);
+        if (objects.some(o => o.key === r.object)) select(r.object, false);
+        const where = view.value && view.value !== "front" ? "views" : "concept";
+        toast("Added " + r.file, false, ["Show", () => { select(r.object, false); setStage(where, true); }]);
+        renderGemini(true);
+      } catch (e) { note.textContent = e.message; add.disabled = false; }
+    });
+    const ago = Math.max(0, Math.round(Date.now() / 1000 - p.mtime));
+    box.append(el("div", {class: "gem" + (p.new ? " new" : "")},
+      el("img", {src: "gemini/" + encodeURIComponent(p.name), alt: "Picture from Gemini", loading: "lazy",
+                 onclick: () => { const lb = el("div", {class: "lightbox", role: "dialog"}, el("img", {src: "gemini/" + encodeURIComponent(p.name), alt: ""}));
+                                  lb.addEventListener("click", () => lb.remove()); document.body.append(lb); }}),
+      el("button", {type: "button", class: "x", "aria-label": "Put it aside", title: "Put it aside (the file stays in Downloads)", text: "×",
+                    onclick: () => { geminiDone.add(p.name); store.set("geminiDone", [...geminiDone].slice(-200)); renderGemini(true); }}),
+      el("div", {class: "cap"}, el("small", {class: "dim", text: ago < 60 ? "just now" : ago < 3600 ? minutes(ago) + " ago" : new Date(p.mtime * 1000).toLocaleString()}),
+         name, el("div", {class: "two"}, view, add), note)));
+  }
+}
+$("#gemini-older").addEventListener("click", () => { geminiOlder = !geminiOlder; renderGemini(true); });
+$("#gemini-close").addEventListener("click", () => { geminiClosed = true; geminiOlder = false; renderGemini(true); });
+
 /* --- polling --- */
 async function refreshObjects(force) {
   const r = await fetch("api/objects", {cache: "no-store"});
@@ -1740,6 +1905,8 @@ async function refresh() {
       presets = s.print_presets || [];
       presetName = s.print_preset || null;
       hintColors = s.print_colors || 4;
+      if (s.gemini) geminiText = s.gemini;
+      refreshGemini();
       if (first) { if (!store.get("print", null)) print.colors = hintColors; first = false; }
       renderPod();
       followPod();

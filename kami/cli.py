@@ -2078,7 +2078,8 @@ def cmd_ui(args, cfg: Config) -> None:
 
     try:
         work = webui.serve(folder, WebBackend(cfg), port=args.port,
-                           open_browser=not args.no_browser, on_ready=ready)
+                           open_browser=not args.no_browser, on_ready=ready,
+                           downloads=Path(args.downloads) if args.downloads else None)
     except OSError as e:
         raise ConfigError(f"Cannot serve on port {args.port}: {e}\n"
                           "Pick another with --port, or leave it out for a free one.") from None
@@ -2369,6 +2370,8 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("folder", nargs="?", help="folder to show (default: output_dir in kami.toml)")
     p.add_argument("--port", type=int, default=0, help="local port (default: a free one)")
     p.add_argument("--no-browser", action="store_true", help="print the URL, do not open a browser")
+    p.add_argument("--downloads", metavar="DIR",
+                   help="where your browser saves Gemini's pictures (default: your Downloads folder)")
     p.set_defaults(func=cmd_ui)
 
     argv = sys.argv[1:] if argv is None else list(argv)
